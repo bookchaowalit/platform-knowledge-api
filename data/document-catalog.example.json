@@ -1,0 +1,48 @@
+{
+  "schema_version": "solo-empire.document-catalog.v1",
+  "documents": [
+    {
+      "path": "docs/getting-started.md",
+      "title": "Getting started",
+      "description": "Example entry: how to run the service.",
+      "document_type": "guide",
+      "root_area": "docs",
+      "status": "current",
+      "tags": [
+        "example"
+      ],
+      "aliases": [],
+      "related": [],
+      "canonical": true,
+      "has_frontmatter": true,
+      "internal_link_count": 1,
+      "parent": null,
+      "created": "2026-01-01",
+      "updated": "2026-01-01"
+    },
+    {
+      "path": "docs/architecture.md",
+      "title": "Architecture",
+      "description": "Example entry: the service boundaries.",
+      "document_type": "reference",
+      "root_area": "docs",
+      "status": "current",
+      "tags": [
+        "example"
+      ],
+      "aliases": [],
+      "related": [
+        "docs/getting-started.md"
+      ],
+      "canonical": true,
+      "has_frontmatter": true,
+      "internal_link_count": 0,
+      "parent": null,
+      "created": "2026-01-01",
+      "updated": "2026-01-01"
+    }
+  ],
+  "generated_by": "scripts/document_catalog.py",
+  "scope": {},
+  "summary": {}
+}

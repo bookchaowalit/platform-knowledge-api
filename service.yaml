@@ -1,0 +1,16 @@
+schema: solo-empire.service.v1
+name: knowledge-api
+owner_module: knowledge
+port: 3430
+env_prefix: KNOWLEDGE_API_
+contract: contracts/knowledge.v1.md
+health: /health
+dependencies: [vendor/service-auth]
+data:
+  owner: solo-empire-document-catalog
+  reads: [data/document-catalog.json]
+  writes: []
+secrets: []
+deploy:
+  target: unassigned
+  image: Dockerfile

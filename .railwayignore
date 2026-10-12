@@ -1,0 +1,9 @@
+# `railway up --no-gitignore` uploads the git-ignored catalog; keep everything else that git ignores out.
+__pycache__/
+build/
+*.egg-info/
+.pytest_cache/
+.env
+node_modules/
+.venv/
+DOCPACK/

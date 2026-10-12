@@ -1,0 +1,8 @@
+system_id: bookchaowalit/private/solo-knowledge-api
+prefix: CARD
+brand: "KNOWLEDGE API"
+subtitle: "API อ่าน snapshot ของ document catalog ของ solo-empire"
+footer: "solo-knowledge-api — Product Card"
+color: "#1b4332"
+audience: internal
+tier: L0

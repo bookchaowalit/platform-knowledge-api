@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://solo-empire.local/contracts/knowledge.v1.json",
+  "title": "Solo Empire Knowledge API v1",
+  "description": "Read-only curated document metadata; document bodies are out of contract.",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "mode", "source"],
+  "properties": {
+    "schema_version": { "const": "solo-empire.knowledge.v1" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "mode": { "const": "live" },
+    "source": { "const": "solo-empire-document-catalog" },
+    "catalog": { "$ref": "#/$defs/catalog" },
+    "summary": { "$ref": "#/$defs/summary" },
+    "shelves": { "type": "array", "items": { "$ref": "#/$defs/shelf" } },
+    "signals": { "$ref": "#/$defs/signals" },
+    "filters": { "$ref": "#/$defs/filters" },
+    "documents": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/document" } },
+    "document": { "$ref": "#/$defs/detail_document" },
+    "neighbors": { "type": "array", "maxItems": 40, "items": { "$ref": "#/$defs/neighbor" } },
+    "boundary": { "type": "string" }
+  },
+  "oneOf": [
+    { "required": ["catalog", "summary", "shelves", "signals", "filters", "documents"] },
+    { "required": ["document", "neighbors", "boundary"] }
+  ],
+  "$defs": {
+    "catalog": {
+      "type": "object",
+      "required": ["schema_version", "generated_by", "scope", "modified_at", "excluded_records"],
+      "properties": {
+        "schema_version": { "const": "solo-empire.document-catalog.v1" },
+        "revision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "generated_by": { "type": "string" },
+        "scope": {
+          "type": "object",
+          "required": ["included", "excluded"],
+          "properties": { "included": { "type": "string" }, "excluded": { "type": "array", "items": { "type": "string" } } }
+        },
+        "modified_at": { "type": "string", "format": "date-time" },
+        "excluded_records": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "required": ["documents_total", "documents_matched", "with_frontmatter", "linked_documents", "root_areas", "status_values", "graph_edges"],
+      "properties": {
+        "documents_total": { "type": "integer", "minimum": 0 },
+        "documents_matched": { "type": "integer", "minimum": 0 },
+        "with_frontmatter": { "type": "integer", "minimum": 0 },
+        "linked_documents": { "type": "integer", "minimum": 0 },
+        "root_areas": { "type": "integer", "minimum": 0 },
+        "status_values": { "type": "integer", "minimum": 0 },
+        "graph_edges": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "shelf": {
+      "type": "object",
+      "required": ["key", "label", "count", "linked", "top_status"],
+      "properties": { "key": { "type": "string" }, "label": { "type": "string" }, "count": { "type": "integer", "minimum": 0 }, "linked": { "type": "integer", "minimum": 0 }, "top_status": { "type": "string" } },
+      "additionalProperties": false
+    },
+    "count": {
+      "type": "object",
+      "required": ["value", "count"],
+      "properties": { "value": { "type": "string" }, "count": { "type": "integer", "minimum": 0 } },
+      "additionalProperties": false
+    },
+    "signals": {
+      "type": "object",
+      "required": ["document_types", "statuses", "top_tags"],
+      "properties": { "document_types": { "type": "array", "items": { "$ref": "#/$defs/count" } }, "statuses": { "type": "array", "items": { "$ref": "#/$defs/count" } }, "top_tags": { "type": "array", "maxItems": 18, "items": { "$ref": "#/$defs/count" } } },
+      "additionalProperties": false
+    },
+    "filters": {
+      "type": "object",
+      "required": ["q", "root_area", "document_type", "status", "tag", "limit", "offset"],
+      "properties": { "q": { "type": "string" }, "root_area": { "type": "string" }, "document_type": { "type": "string" }, "status": { "type": "string" }, "tag": { "type": "string" }, "limit": { "type": "integer", "minimum": 1, "maximum": 100 }, "offset": { "type": "integer", "minimum": 0, "maximum": 5000 } },
+      "additionalProperties": false
+    },
+    "document": {
+      "type": "object",
+      "required": ["id", "path", "title", "description", "document_type", "status", "root_area", "tags", "has_frontmatter", "internal_link_count", "created", "updated", "parent", "related_count"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+        "path": { "type": "string", "pattern": "^(?!/).+\\.(?:md|mdx)$" },
+        "title": { "type": "string" }, "description": { "type": ["string", "null"] }, "document_type": { "type": "string" }, "status": { "type": "string" }, "root_area": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" }, "maxItems": 16 }, "has_frontmatter": { "type": "boolean" }, "internal_link_count": { "type": "integer", "minimum": 0 },
+        "created": { "type": ["string", "null"] }, "updated": { "type": ["string", "null"] }, "parent": { "type": ["string", "null"] }, "related_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "detail_document": {
+      "type": "object",
+      "required": ["id", "path", "title", "description", "document_type", "status", "root_area", "tags", "has_frontmatter", "internal_link_count", "created", "updated", "parent", "related_count", "aliases", "canonical", "related", "children"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-f0-9]{12}$" },
+        "path": { "type": "string", "pattern": "^(?!/).+\\.(?:md|mdx)$" },
+        "title": { "type": "string" }, "description": { "type": ["string", "null"] }, "document_type": { "type": "string" }, "status": { "type": "string" }, "root_area": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" }, "maxItems": 16 }, "has_frontmatter": { "type": "boolean" }, "internal_link_count": { "type": "integer", "minimum": 0 },
+        "created": { "type": ["string", "null"] }, "updated": { "type": ["string", "null"] }, "parent": { "type": ["string", "null"] }, "related_count": { "type": "integer", "minimum": 0 },
+        "aliases": { "type": "array", "items": { "type": "string" }, "maxItems": 8 }, "canonical": { "type": "null" }, "related": { "type": "array", "items": { "type": "string" }, "maxItems": 20 }, "children": { "type": "array", "items": { "type": "string" }, "maxItems": 20 }
+      },
+      "additionalProperties": false
+    },
+    "neighbor": {
+      "type": "object",
+      "required": ["relation", "document"],
+      "properties": { "relation": { "enum": ["parent", "related", "child"] }, "document": { "$ref": "#/$defs/document" } },
+      "additionalProperties": false
+    }
+  }
+}
