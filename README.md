@@ -1,5 +1,5 @@
 # platform-knowledge-api
-Moved out of solo-empire `services/knowledge-api` on 2026-10-11 with its history (subtree split). Reads a generated document catalog JSON (`data/document-catalog.json`, configurable path via `KNOWLEDGE_API_CATALOG_PATH`). `vendor/service-auth` is a vendored copy of `bookchaowalit/service-auth`.
+Moved out of solo-empire `services/knowledge-api` on 2026-10-11 with its history (subtree split). Reads a generated document catalog JSON (`data/document-catalog.json`, configurable path via `KNOWLEDGE_API_CATALOG_PATH`). `vendor/service-auth` is a vendored copy of `bookchaowalit/platform-auth-sdk`.
 
 **Ownership.** The real catalog is private document metadata and is **not in git**: architecture-docs writes it into `data/document-catalog.json` of a local checkout (`task knowledge-api:catalog:sync`). To self-host, copy `data/document-catalog.example.json` to `data/document-catalog.json` (or point `KNOWLEDGE_API_CATALOG_PATH` at your own catalog). Check its shape with:
 
