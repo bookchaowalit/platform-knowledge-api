@@ -160,9 +160,9 @@ class StrictMCPServer(MCPServer):
                 }
         return tools
 
-    async def call_tool(
+    async def call_tool(  # type: ignore[override]
         self, name: str, arguments: dict[str, Any], context: Any = None
-    ):  # type: ignore[override]
+    ):
         model = self.argument_models.get(name)
         if model is None:
             raise ToolFailed("unknown_tool")
