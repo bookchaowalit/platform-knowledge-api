@@ -15,7 +15,10 @@ SPEC.loader.exec_module(validator)
 
 
 def catalog(*ids: str) -> dict:
-    return {"schema_version": validator.SCHEMA_VERSION, "documents": [{"path": i} for i in ids]}
+    return {
+        "schema_version": validator.SCHEMA_VERSION,
+        "documents": [{"path": i} for i in ids],
+    }
 
 
 class ValidateCatalogTest(unittest.TestCase):
@@ -30,19 +33,31 @@ class ValidateCatalogTest(unittest.TestCase):
         self.assertEqual(self.run_main(catalog("a", "b")), 0)
 
     def test_invalid_shapes_are_rejected(self) -> None:
-        for bad in ({"schema_version": "x", "documents": []}, catalog("a", "a"), [], {"schema_version": "x", "documents": [{"path": "a"}]}):
+        for bad in (
+            {"schema_version": "x", "documents": []},
+            catalog("a", "a"),
+            [],
+            {"schema_version": "x", "documents": [{"path": "a"}]},
+        ):
             self.assertEqual(self.run_main(bad), 2)
 
     def test_missing_file_fails(self) -> None:
-        self.assertEqual(validator.main(["--path", str(self.path.parent / "absent.json")]), 2)
+        self.assertEqual(
+            validator.main(["--path", str(self.path.parent / "absent.json")]), 2
+        )
 
-    @unittest.skipUnless(validator.DEST.exists(), "the real catalog is not in git; present only in the owner's checkout")
+    @unittest.skipUnless(
+        validator.DEST.exists(),
+        "the real catalog is not in git; present only in the owner's checkout",
+    )
     def test_local_snapshot_has_valid_shape(self) -> None:
         payload = validator.load_validated(validator.DEST)
         self.assertGreater(len(payload["documents"]), 0)
 
     def test_example_catalog_has_valid_shape(self) -> None:
-        payload = validator.load_validated(validator.DEST.with_name("document-catalog.example.json"))
+        payload = validator.load_validated(
+            validator.DEST.with_name("document-catalog.example.json")
+        )
         self.assertGreater(len(payload["documents"]), 0)
 
 
