@@ -1,13 +1,12 @@
 import math
+import os
 import time
 import unittest
-import os
 from unittest.mock import patch
 
 import jwt
-from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization
-
+from cryptography.hazmat.primitives.asymmetric import rsa
 from service_auth import AuthError, AuthPolicy
 
 
@@ -36,17 +35,17 @@ class AuthTests(unittest.TestCase):
 
     def token(self, changes=None, *, key=None, headers=None, omit=None):
         now = int(time.time())
-        claims = dict(
-            iss="https://solo.example",
-            aud="accounts-api",
-            sub="oidc-owner",
-            tenant_id="owner",
-            scope="accounts:read",
-            iat=now,
-            nbf=now,
-            exp=now + 120,
-            jti="test-request-id",
-        )
+        claims = {
+            "iss": "https://solo.example",
+            "aud": "accounts-api",
+            "sub": "oidc-owner",
+            "tenant_id": "owner",
+            "scope": "accounts:read",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 120,
+            "jti": "test-request-id",
+        }
         claims.update(changes or {})
         if omit:
             claims.pop(omit)

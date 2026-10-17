@@ -1,7 +1,6 @@
 """MCP server tests: fake HTTP transport and a throwaway key; no network and no Solo Web."""
 
 import asyncio
-import time
 
 import httpx
 import jwt
@@ -160,7 +159,7 @@ def test_errors_are_a_fixed_message_from_the_status_only(status, message):
         },
         "error": {"code": "leak-code", "message": "do-not-leak"},
     }
-    name = sorted(READS)[0]
+    name = min(READS)
     with pytest.raises(Exception) as caught:
         call(server(Fake(status=status, body=secret)), name, ARGS.get(name, {}))
     assert str(caught.value).endswith(": " + message)
@@ -168,7 +167,7 @@ def test_errors_are_a_fixed_message_from_the_status_only(status, message):
 
 
 def test_token_with_whitespace_or_control_characters_is_refused_without_echo():
-    name = sorted(READS)[0]
+    name = min(READS)
     for bad in (
         "two words-abcdefgh",
         "line\nbreak-abcdefgh",
@@ -221,7 +220,7 @@ def test_transport_failure_does_not_echo_the_error():
         lambda: "tok-123",
     ).server
     with pytest.raises(Exception) as caught:
-        call(srv, sorted(READS)[0], ARGS.get(sorted(READS)[0], {}))
+        call(srv, min(READS), ARGS.get(min(READS), {}))
     assert "tok-123" not in str(caught.value) and "503" in str(caught.value)
 
 
@@ -282,7 +281,7 @@ def test_minted_token_is_rejected_for_another_audience_scope_or_subject(env, key
         (mod.AUDIENCE, mod.SCOPE, {"someone-else"}),
     ):
         policy = AuthPolicy(ORIGIN, audience, keys[1], frozenset(subjects), scope)
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 - any refusal passes; the error type differs per case
             policy.authenticate({"authorization": f"Bearer {token}"})
 
 
@@ -331,7 +330,7 @@ def test_ready_token_overrides_minting_and_is_cleaned():
 def test_every_tool_call_sends_a_freshly_minted_token(env, keys, monkeypatch):
     fake = Fake()
     srv = build_server(fake.client(), lambda: mod.mint(env)).server
-    name = sorted(READS)[0]
+    name = min(READS)
     call(srv, name, ARGS.get(name, {}))
     call(srv, name, ARGS.get(name, {}))
     seen = [r.headers["authorization"].removeprefix("Bearer ") for r in fake.requests]

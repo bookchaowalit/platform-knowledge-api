@@ -22,17 +22,17 @@ import os
 import posixpath
 import re
 from collections import Counter, defaultdict
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import RLock
-from typing import Any, Mapping
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from service_auth import AuthError, AuthPolicy, check_read_auth, is_loopback, readiness
-
 
 SERVICE_NAME = "solo-empire-knowledge-api"
 SCHEMA_VERSION = "solo-empire.knowledge.v1"
@@ -65,12 +65,7 @@ class Response:
 
 
 def utc_now() -> str:
-    return (
-        datetime.now(timezone.utc)
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z")
-    )
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def default_catalog_path() -> Path:
@@ -197,9 +192,9 @@ def safe_path(path: str) -> bool:
         "finance/tax/",
         "clients/",
     )
-    if folded.startswith(private_prefixes) and not folded.endswith("/readme.md"):
-        return False
-    return True
+    return not (
+        folded.startswith(private_prefixes) and not folded.endswith("/readme.md")
+    )
 
 
 def safe_alias(value: Any) -> str | None:
@@ -388,7 +383,7 @@ class CatalogStore:
                 if isinstance(payload.get("scope"), Mapping)
                 else [],
             },
-            "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC)
             .replace(microsecond=0)
             .isoformat()
             .replace("+00:00", "Z"),
@@ -741,7 +736,7 @@ class KnowledgeApi:
                     }
                 },
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - last-resort 500 that never echoes internal error text
             return Response(
                 500,
                 {
@@ -756,7 +751,7 @@ class KnowledgeApi:
 class KnowledgeRequestHandler(BaseHTTPRequestHandler):
     api = KnowledgeApi()
 
-    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+    def log_message(self, format: str, *args: Any) -> None:
         return
 
     def _dispatch(self) -> None:
@@ -803,10 +798,10 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         if response.status != HTTPStatus.NO_CONTENT:
             self.wfile.write(encoded)
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         self._dispatch()
 
-    def do_OPTIONS(self) -> None:  # noqa: N802
+    def do_OPTIONS(self) -> None:
         self._dispatch()
 
     do_POST = _dispatch

@@ -4,32 +4,32 @@
 from __future__ import annotations
 
 import json
-import tempfile
-import unittest
-import time
-import subprocess
 import os
-from unittest.mock import patch
-
-import jwt
-from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives import serialization
-from service_auth import AuthPolicy
+import subprocess
+import tempfile
+import time
+import unittest
 from http.client import HTTPConnection
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
+from unittest.mock import patch
+
+import jwt
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from service_auth import AuthPolicy
 
 ROOT = Path(__file__).resolve().parents[1]
 import sys
 
 sys.path.insert(0, str(ROOT))
-from server import KnowledgeApi, KnowledgeRequestHandler  # noqa: E402
+from server import KnowledgeApi, KnowledgeRequestHandler
 
 
 class KnowledgeApiTest(unittest.TestCase):
     def setUp(self) -> None:
-        handle = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+        handle = tempfile.NamedTemporaryFile(suffix=".json", delete=False)  # noqa: SIM115 - closed on the next line; only the path is kept
         handle.close()
         self.catalog_path = Path(handle.name)
         self.catalog_path.write_text(
@@ -169,17 +169,17 @@ class KnowledgeApiTest(unittest.TestCase):
             self.catalog_path, environment="production", auth_policy=policy
         )
         now = int(time.time())
-        claims = dict(
-            iss="https://solo.example",
-            aud="knowledge-api",
-            sub="fixture-owner",
-            tenant_id="owner",
-            scope="knowledge:read",
-            iat=now,
-            nbf=now,
-            exp=now + 120,
-            jti="fixture-request",
-        )
+        claims = {
+            "iss": "https://solo.example",
+            "aud": "knowledge-api",
+            "sub": "fixture-owner",
+            "tenant_id": "owner",
+            "scope": "knowledge:read",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 120,
+            "jti": "fixture-request",
+        }
 
         def headers(changes=None):
             return {
@@ -250,6 +250,7 @@ class KnowledgeApiTest(unittest.TestCase):
             capture_output=True,
             text=True,
             timeout=5,
+            check=False,  # the test asserts the non-zero exit code itself
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("KNOWLEDGE_API_AUTH_*", result.stderr)

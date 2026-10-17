@@ -7,8 +7,8 @@ import math
 import os
 import secrets
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping
 from urllib.parse import urlsplit
 
 import jwt
@@ -207,7 +207,7 @@ def readiness(policy: AuthPolicy, environment: str, store) -> tuple[int, dict]:
     try:
         store.snapshot()
         source_ready = True
-    except Exception:
+    except Exception:  # noqa: BLE001 - any store failure means "not ready"; the error is deliberately not exposed
         source_ready = False
     auth_ready = policy.ready
     ready = source_ready and auth_ready
