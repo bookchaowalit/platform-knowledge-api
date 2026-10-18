@@ -4,7 +4,7 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 KNOWLEDGE_API_HOST=0.0.0.0 KNOWLEDGE_API_ENV=production KNOWLEDGE_API_CATALOG_PATH=/app/data/document-catalog.json
 WORKDIR /app
 COPY vendor/service-auth /app/vendor/service-auth
-COPY pyproject.toml server.py /app/
+COPY pyproject.toml server.py _sentry.py /app/
 RUN pip install /app/vendor/service-auth /app
 COPY data/document-catalog.json /app/data/document-catalog.json
 RUN chmod -R a+rX /app/data
