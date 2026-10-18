@@ -34,6 +34,10 @@ from urllib.parse import parse_qs, urlsplit
 
 from service_auth import AuthError, AuthPolicy, check_read_auth, is_loopback, readiness
 
+from _sentry import capture, init_sentry
+
+init_sentry()
+
 SERVICE_NAME = "solo-empire-knowledge-api"
 SCHEMA_VERSION = "solo-empire.knowledge.v1"
 CATALOG_SCHEMA_VERSION = "solo-empire.document-catalog.v1"
@@ -736,7 +740,8 @@ class KnowledgeApi:
                     }
                 },
             )
-        except Exception:  # noqa: BLE001 - last-resort 500 that never echoes internal error text
+        except Exception as exc:  # noqa: BLE001 - last-resort 500 that never echoes internal error text
+            capture(exc)  # no-op unless SENTRY_DSN is set
             return Response(
                 500,
                 {
