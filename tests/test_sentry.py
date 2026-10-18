@@ -39,17 +39,11 @@ class SentryTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_dsn_initialises_errors_only_without_pii(self):
+        try:
+            sentry_sdk = importlib.import_module("sentry_sdk")
+        except ImportError:
+            self.skipTest("sentry_sdk not installed")
         calls, tags = [], {}
-
-        class Fake:
-            @staticmethod
-            def init(**kw):
-                calls.append(kw)
-
-            @staticmethod
-            def set_tag(key, value):
-                tags[key] = value
-
         env = _env_without("SENTRY_ENVIRONMENT")
         env.update(
             SENTRY_DSN="https://public@o0.ingest.sentry.io/0",
@@ -58,7 +52,8 @@ class SentryTests(unittest.TestCase):
         err = io.StringIO()
         with (
             patch.dict(os.environ, env, clear=True),
-            patch.dict(sys.modules, {"sentry_sdk": Fake}),
+            patch.object(sentry_sdk, "init", lambda **kw: calls.append(kw)),
+            patch.object(sentry_sdk, "set_tag", lambda k, v: tags.__setitem__(k, v)),
             redirect_stderr(err),
         ):
             _sentry.init_sentry()
@@ -68,6 +63,10 @@ class SentryTests(unittest.TestCase):
         self.assertIs(calls[0]["include_local_variables"], False)
         self.assertEqual(calls[0]["max_request_body_size"], "never")
         self.assertIs(calls[0]["before_send"], _sentry._scrub_event)
+        (logging_integration,) = calls[0]["integrations"]
+        self.assertIsNone(logging_integration._handler)
+        self.assertIsNone(logging_integration._breadcrumb_handler)
+        self.assertIsNone(logging_integration._sentry_logs_handler)
         self.assertEqual(tags, {"service": "solo-knowledge-api"})
         self.assertIn("sentry: enabled for solo-knowledge-api", err.getvalue())
 
@@ -133,6 +132,19 @@ class SentryTests(unittest.TestCase):
             patch.dict(sys.modules, {"sentry_sdk": Boom()}),
         ):
             _sentry.capture(RuntimeError("x"))  # must not import or call sentry_sdk
+
+    def test_scrub_event_keeps_only_scrubbed_formatted_log_text(self):
+        token = "opaque" + "-token-value"
+        event = {
+            "logentry": {
+                "message": "Authorization: Bearer %s",
+                "params": [token],
+                "formatted": "Authorization: Bearer " + token,
+            }
+        }
+        out = _sentry._scrub_event(event, {})
+        self.assertEqual(out["logentry"], {"message": "Authorization: Bearer ***"})
+        self.assertNotIn(token, str(out))
 
 
 if __name__ == "__main__":
