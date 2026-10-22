@@ -36,7 +36,7 @@ class SentryTests(unittest.TestCase):
             patch.dict(sys.modules, {"sentry_sdk": fake}),
         ):
             _sentry.init_sentry()
-        self.assertEqual(calls, [])
+        assert calls == []
 
     def test_dsn_initialises_errors_only_without_pii(self):
         try:
@@ -57,39 +57,38 @@ class SentryTests(unittest.TestCase):
             redirect_stderr(err),
         ):
             _sentry.init_sentry()
-        self.assertEqual(calls[0]["environment"], "production")
-        self.assertIsNone(calls[0]["traces_sample_rate"])
-        self.assertIs(calls[0]["send_default_pii"], False)
-        self.assertIs(calls[0]["include_local_variables"], False)
-        self.assertEqual(calls[0]["max_request_body_size"], "never")
-        self.assertIs(calls[0]["before_send"], _sentry._scrub_event)
+        assert calls[0]["environment"] == "production"
+        assert calls[0]["traces_sample_rate"] is None
+        assert calls[0]["send_default_pii"] is False
+        assert calls[0]["include_local_variables"] is False
+        assert calls[0]["max_request_body_size"] == "never"
+        assert calls[0]["before_send"] is _sentry._scrub_event
         (logging_integration,) = calls[0]["integrations"]
-        self.assertIsNone(logging_integration._handler)
-        self.assertIsNone(logging_integration._breadcrumb_handler)
-        self.assertIsNone(logging_integration._sentry_logs_handler)
-        self.assertEqual(tags, {"service": "solo-knowledge-api"})
-        self.assertIn("sentry: enabled for solo-knowledge-api", err.getvalue())
+        assert logging_integration._handler is None
+        assert logging_integration._breadcrumb_handler is None
+        assert logging_integration._sentry_logs_handler is None
+        assert tags == {"service": "solo-knowledge-api"}
+        assert "sentry: enabled for solo-knowledge-api" in err.getvalue()
 
     def test_real_sdk_installed(self):
         try:
             module = importlib.import_module("sentry_sdk")
         except ImportError:
             self.skipTest("sentry_sdk not installed")
-        self.assertTrue(module)
+        assert module
 
     def test_scrub_removes_url_passwords_tokens_and_jwts(self):
         text = (
             f"connect postgresql://app:{_PW}@db.example/app failed; "
             f"pass"
-            + "word="
-            + "dummy-value Authorization: Bearer "
-            + "abc.def-ghi "
-            + _JWT
+            "word="
+            "dummy-value Authorization: Bearer "
+            "abc.def-ghi " + _JWT
         )
         out = _sentry.scrub(text)
         for secret in (_PW, "dummy-value", "abc.def-ghi", _JWT):
-            self.assertNotIn(secret, out)
-        self.assertIn("postgresql://app:***@db.example/app", out)
+            assert secret not in out
+        assert "postgresql://app:***@db.example/app" in out
 
     def test_scrub_event_drops_request_details_and_extra(self):
         event = {
@@ -114,13 +113,11 @@ class SentryTests(unittest.TestCase):
             "extra": {"sys.argv": ["--token", "t"]},
         }
         out = _sentry._scrub_event(event, {})
-        self.assertEqual(
-            out["exception"]["values"][0]["value"], "bad url postgres://u:***@h/db"
-        )
-        self.assertEqual(out["request"], {"method": "GET"})
-        self.assertNotIn("data", out["breadcrumbs"]["values"][0])
-        self.assertNotIn("abc", out["breadcrumbs"]["values"][0]["message"])
-        self.assertNotIn("extra", out)
+        assert out["exception"]["values"][0]["value"] == "bad url postgres://u:***@h/db"
+        assert out["request"] == {"method": "GET"}
+        assert "data" not in out["breadcrumbs"]["values"][0]
+        assert "abc" not in out["breadcrumbs"]["values"][0]["message"]
+        assert "extra" not in out
 
     def test_capture_is_a_noop_without_dsn(self):
         class Boom:
@@ -143,8 +140,8 @@ class SentryTests(unittest.TestCase):
             }
         }
         out = _sentry._scrub_event(event, {})
-        self.assertEqual(out["logentry"], {"message": "Authorization: Bearer ***"})
-        self.assertNotIn(token, str(out))
+        assert out["logentry"] == {"message": "Authorization: Bearer ***"}
+        assert token not in str(out)
 
     def test_scrub_event_drops_dynamic_sampling_context(self):
         event = {
@@ -156,7 +153,7 @@ class SentryTests(unittest.TestCase):
             }
         }
         out = _sentry._scrub_event(event, {})
-        self.assertEqual(out["contexts"]["trace"], {"trace_id": "t"})
+        assert out["contexts"]["trace"] == {"trace_id": "t"}
 
 
 if __name__ == "__main__":

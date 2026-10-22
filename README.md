@@ -7,7 +7,7 @@ Moved out of solo-empire `services/knowledge-api` on 2026-10-11 with its history
 python3 scripts/validate_catalog.py             # schema_version, non-empty documents, unique paths
 ```
 
-Test: `PYTHONPATH=vendor/service-auth python3 -m unittest discover -s tests -v`
+Test: `uv sync --frozen --all-extras && uv run pytest -q` (lint, types and coverage: see [Run and verify](#run-and-verify))
 
 ---
 
@@ -25,9 +25,11 @@ From this repository root. The catalog is produced outside this repository. This
 `KNOWLEDGE_API_CATALOG_PATH` (or `--catalog`) at any other path:
 
 ```bash
-python3 -m pip install ./vendor/service-auth .
-KNOWLEDGE_API_CATALOG_PATH=/path/to/document-catalog.json python3 server.py
-PYTHONPATH=vendor/service-auth python3 -m unittest discover -s tests -v
+uv sync --frozen --all-extras          # dependencies from uv.lock (vendor/service-auth is a path source)
+KNOWLEDGE_API_CATALOG_PATH=/path/to/document-catalog.json uv run python server.py
+uvx ruff@0.17.1 check . && uvx ruff@0.17.1 format --check .
+uv run mypy .                           # strict on server.py, _sentry.py, knowledge_mcp.py, scripts/
+uv run pytest -q --cov                  # CI gates total coverage (see .github/workflows/ci.yml)
 ```
 
 The listener defaults to `127.0.0.1:3430`. Configure `KNOWLEDGE_API_HOST`,
@@ -136,6 +138,6 @@ Trade-off: the signing key can mint tokens for every Solo Web service, so only r
 that already holds that key. A narrower alternative, if the key must not sit beside agents, is a Solo Web owner-session
 endpoint that issues a per-service token; set `EMPIRE_TOKEN` from it and the key is never read.
 
-Run: `uv venv .venv && uv pip install ./vendor/service-auth -e ".[dev]"`, then `.venv/bin/knowledge-mcp` (see `.mcp.json`).
+Run: `uv sync --frozen --all-extras`, then `.venv/bin/knowledge-mcp` (see `.mcp.json`).
 Tests: `.venv/bin/pytest tests/test_mcp.py` (fake HTTP transport and a throwaway key; the minted token is checked with
 the vendored `service_auth` verifier the API uses).

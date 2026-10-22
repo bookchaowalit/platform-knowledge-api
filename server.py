@@ -98,6 +98,12 @@ def bounded_text(
     return result
 
 
+def first(query: Mapping[str, list[str]], field: str) -> str | None:
+    """The first value of a query parameter, or None when it is absent."""
+    values = query.get(field)
+    return values[0] if values else None
+
+
 def parse_limit(value: str | None) -> int:
     if value in (None, ""):
         return DEFAULT_LIMIT
@@ -530,22 +536,18 @@ class KnowledgeApi:
 
     def _overview(self, query: Mapping[str, list[str]]) -> Response:
         q = (
-            bounded_text(
-                (query.get("q") or [None])[0], "q", max_length=MAX_QUERY_LENGTH
-            )
+            bounded_text(first(query, "q"), "q", max_length=MAX_QUERY_LENGTH)
             if query.get("q")
             else None
         )
         root_area = (
-            bounded_text(
-                (query.get("root_area") or [None])[0], "root_area", max_length=80
-            )
+            bounded_text(first(query, "root_area"), "root_area", max_length=80)
             if query.get("root_area")
             else None
         )
         document_type = (
             bounded_text(
-                (query.get("document_type") or [None])[0],
+                first(query, "document_type"),
                 "document_type",
                 max_length=80,
             )
@@ -553,17 +555,17 @@ class KnowledgeApi:
             else None
         )
         status = (
-            bounded_text((query.get("status") or [None])[0], "status", max_length=100)
+            bounded_text(first(query, "status"), "status", max_length=100)
             if query.get("status")
             else None
         )
         tag = (
-            bounded_text((query.get("tag") or [None])[0], "tag", max_length=60)
+            bounded_text(first(query, "tag"), "tag", max_length=60)
             if query.get("tag")
             else None
         )
-        limit = parse_limit((query.get("limit") or [None])[0])
-        offset = parse_offset((query.get("offset") or [None])[0])
+        limit = parse_limit(first(query, "limit"))
+        offset = parse_offset(first(query, "offset"))
         rows, _, metadata = self.catalog.snapshot()
         filtered = [
             row
@@ -645,7 +647,7 @@ class KnowledgeApi:
         )
 
     def _detail(self, query: Mapping[str, list[str]]) -> Response:
-        raw_path = (query.get("path") or [None])[0]
+        raw_path = first(query, "path")
         path = normalize_path(raw_path, field="path")
         if not path:
             raise ApiError(400, "path is required", code="missing_path")
@@ -660,16 +662,15 @@ class KnowledgeApi:
             neighbors.append(
                 {"relation": "parent", "document": self._public_document(parent)}
             )
-        for related_path in row.get("related", []):
-            if related := by_path.get(related_path):
-                neighbors.append(
-                    {"relation": "related", "document": self._public_document(related)}
-                )
-        for child_path in row.get("children", []):
-            if child := by_path.get(child_path):
-                neighbors.append(
-                    {"relation": "child", "document": self._public_document(child)}
-                )
+        for relation, paths in (
+            ("related", row.get("related", [])),
+            ("child", row.get("children", [])),
+        ):
+            neighbors.extend(
+                {"relation": relation, "document": self._public_document(other)}
+                for other_path in paths
+                if (other := by_path.get(other_path))
+            )
         return Response(
             200,
             {
@@ -854,4 +855,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    main()

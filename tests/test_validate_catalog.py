@@ -10,6 +10,8 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "validate_catalog.py"
 SPEC = importlib.util.spec_from_file_location("validate_catalog", SCRIPT)
+assert SPEC is not None
+assert SPEC.loader is not None
 validator = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(validator)
 
@@ -30,21 +32,20 @@ class ValidateCatalogTest(unittest.TestCase):
         return validator.main(["--path", str(self.path)])
 
     def test_valid_shape_passes(self) -> None:
-        self.assertEqual(self.run_main(catalog("a", "b")), 0)
+        assert self.run_main(catalog("a", "b")) == 0
 
     def test_invalid_shapes_are_rejected(self) -> None:
+        bad: object
         for bad in (
             {"schema_version": "x", "documents": []},
             catalog("a", "a"),
             [],
             {"schema_version": "x", "documents": [{"path": "a"}]},
         ):
-            self.assertEqual(self.run_main(bad), 2)
+            assert self.run_main(bad) == 2
 
     def test_missing_file_fails(self) -> None:
-        self.assertEqual(
-            validator.main(["--path", str(self.path.parent / "absent.json")]), 2
-        )
+        assert validator.main(["--path", str(self.path.parent / "absent.json")]) == 2
 
     @unittest.skipUnless(
         validator.DEST.exists(),
@@ -52,13 +53,13 @@ class ValidateCatalogTest(unittest.TestCase):
     )
     def test_local_snapshot_has_valid_shape(self) -> None:
         payload = validator.load_validated(validator.DEST)
-        self.assertGreater(len(payload["documents"]), 0)
+        assert len(payload["documents"]) > 0
 
     def test_example_catalog_has_valid_shape(self) -> None:
         payload = validator.load_validated(
             validator.DEST.with_name("document-catalog.example.json")
         )
-        self.assertGreater(len(payload["documents"]), 0)
+        assert len(payload["documents"]) > 0
 
 
 if __name__ == "__main__":

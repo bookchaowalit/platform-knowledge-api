@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -21,10 +22,8 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from service_auth import AuthPolicy
 
 ROOT = Path(__file__).resolve().parents[1]
-import sys
-
 sys.path.insert(0, str(ROOT))
-from server import KnowledgeApi, KnowledgeRequestHandler
+from server import KnowledgeApi, KnowledgeRequestHandler  # noqa: E402 - after the repo root is on sys.path
 
 
 class KnowledgeApiTest(unittest.TestCase):
@@ -187,12 +186,12 @@ class KnowledgeApiTest(unittest.TestCase):
                 + jwt.encode({**claims, **(changes or {})}, key, algorithm="RS256")
             }
 
-        self.assertEqual(api.handle("GET", "/health").status, 200)
-        self.assertEqual(api.handle("GET", "/ready").status, 200)
-        self.assertEqual(api.handle("GET", "/api/v1/knowledge").status, 401)
+        assert api.handle("GET", "/health").status == 200
+        assert api.handle("GET", "/ready").status == 200
+        assert api.handle("GET", "/api/v1/knowledge").status == 401
         response = api.handle("GET", "/api/v1/knowledge", headers=headers())
-        self.assertEqual(response.status, 200)
-        self.assertEqual(len(response.payload["catalog"]["revision"]), 64)
+        assert response.status == 200
+        assert len(response.payload["catalog"]["revision"]) == 64
         for changes, expected in (
             ({"scope": "other:read"}, 403),
             ({"tenant_id": "other"}, 403),
@@ -206,11 +205,12 @@ class KnowledgeApiTest(unittest.TestCase):
                 denied = api.handle(
                     "GET", "/api/v1/knowledge", headers=headers(changes)
                 )
-                self.assertEqual(denied.status, expected)
-                self.assertEqual(set(denied.payload), {"error"})
-                self.assertNotIn("Bearer", json.dumps(denied.payload))
-        self.assertEqual(
-            api.handle("GET", "/api/v1/knowledge/document?path=docs/one.md").status, 401
+                assert denied.status == expected
+                assert set(denied.payload) == {"error"}
+                assert "Bearer" not in json.dumps(denied.payload)
+        assert (
+            api.handle("GET", "/api/v1/knowledge/document?path=docs/one.md").status
+            == 401
         )
 
     def test_static_token_is_never_production_authorization(self) -> None:
@@ -218,25 +218,25 @@ class KnowledgeApiTest(unittest.TestCase):
             api = KnowledgeApi(
                 self.catalog_path, token="development-only", environment="production"
             )
-        self.assertEqual(
+        assert (
             api.handle(
                 "GET",
                 "/api/v1/knowledge",
                 headers={"Authorization": "Bearer development-only"},
-            ).status,
-            503,
+            ).status
+            == 503
         )
-        self.assertEqual(api.handle("GET", "/health").status, 200)
-        self.assertEqual(api.handle("GET", "/ready").payload["auth"], "disabled")
+        assert api.handle("GET", "/health").status == 200
+        assert api.handle("GET", "/ready").payload["auth"] == "disabled"
 
     def test_readiness_and_remote_bind_fail_closed(self) -> None:
         with patch.dict(os.environ, {}, clear=True):
             api = KnowledgeApi(self.catalog_path, environment="development")
-        self.assertEqual(api.handle("GET", "/ready").payload["auth"], "development")
-        self.assertEqual(api.handle("GET", "/ready").status, 503)
+        assert api.handle("GET", "/ready").payload["auth"] == "development"
+        assert api.handle("GET", "/ready").status == 503
         self.catalog_path.unlink()
-        self.assertEqual(api.handle("GET", "/ready").payload["source"], "unavailable")
-        self.assertEqual(api.handle("GET", "/health").status, 200)
+        assert api.handle("GET", "/ready").payload["source"] == "unavailable"
+        assert api.handle("GET", "/health").status == 200
         env = {
             **os.environ,
             "KNOWLEDGE_API_TOKEN": "legacy-token",
@@ -252,91 +252,80 @@ class KnowledgeApiTest(unittest.TestCase):
             timeout=5,
             check=False,  # the test asserts the non-zero exit code itself
         )
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("KNOWLEDGE_API_AUTH_*", result.stderr)
+        assert result.returncode == 2
+        assert "KNOWLEDGE_API_AUTH_*" in result.stderr
 
     def test_overview_is_bounded_searchable_and_metadata_only(self) -> None:
         response = self.api.handle("GET", "/api/v1/knowledge?limit=10")
-        self.assertEqual(response.status, 200)
+        assert response.status == 200
         payload = response.payload
-        self.assertEqual(payload["schema_version"], "solo-empire.knowledge.v1")
-        self.assertEqual(payload["summary"]["documents_total"], 4)
-        self.assertEqual(payload["summary"]["root_areas"], 3)
-        self.assertEqual(
-            {row["path"] for row in payload["documents"]},
-            {
-                "docs/one.md",
-                "knowledge/two.md",
-                "clients/acme/README.md",
-                "Clients/Oak/README.md",
-            },
-        )
-        self.assertNotIn("body", payload["documents"][0])
+        assert payload["schema_version"] == "solo-empire.knowledge.v1"
+        assert payload["summary"]["documents_total"] == 4
+        assert payload["summary"]["root_areas"] == 3
+        assert {row["path"] for row in payload["documents"]} == {
+            "docs/one.md",
+            "knowledge/two.md",
+            "clients/acme/README.md",
+            "Clients/Oak/README.md",
+        }
+        assert "body" not in payload["documents"][0]
         filtered = self.api.handle("GET", "/api/v1/knowledge?q=Alpha&tag=guide")
-        self.assertEqual(
-            [row["path"] for row in filtered.payload["documents"]], ["docs/one.md"]
-        )
+        assert [row["path"] for row in filtered.payload["documents"]] == ["docs/one.md"]
 
     def test_detail_resolves_relationships_without_reading_body(self) -> None:
         response = self.api.handle(
             "GET", "/api/v1/knowledge/document?path=docs%2Fone.md"
         )
-        self.assertEqual(response.status, 200)
+        assert response.status == 200
         document = response.payload["document"]
-        self.assertEqual(document["related"], ["knowledge/two.md"])
-        self.assertEqual(document["children"], ["knowledge/two.md"])
-        self.assertEqual(response.payload["neighbors"][0]["relation"], "related")
-        self.assertNotIn("body", document)
+        assert document["related"] == ["knowledge/two.md"]
+        assert document["children"] == ["knowledge/two.md"]
+        assert response.payload["neighbors"][0]["relation"] == "related"
+        assert "body" not in document
 
     def test_auth_and_safe_errors(self) -> None:
         protected = KnowledgeApi(self.catalog_path, token="catalog-test-token")
-        self.assertEqual(protected.handle("GET", "/api/v1/knowledge").status, 401)
-        self.assertEqual(
+        assert protected.handle("GET", "/api/v1/knowledge").status == 401
+        assert (
             protected.handle(
                 "GET",
                 "/api/v1/knowledge",
                 headers={"Authorization": "Bearer catalog-test-token"},
-            ).status,
-            200,
+            ).status
+            == 200
         )
         production = KnowledgeApi(self.catalog_path, token="", environment="production")
-        self.assertEqual(production.handle("GET", "/api/v1/knowledge").status, 503)
-        self.assertEqual(
-            self.api.handle("GET", "/api/v1/knowledge?limit=101").status, 400
-        )
-        self.assertEqual(
+        assert production.handle("GET", "/api/v1/knowledge").status == 503
+        assert self.api.handle("GET", "/api/v1/knowledge?limit=101").status == 400
+        assert (
             self.api.handle(
                 "GET", "/api/v1/knowledge/document?path=../secret.md"
-            ).status,
-            400,
+            ).status
+            == 400
         )
-        self.assertEqual(
-            self.api.handle("GET", "/api/v1/knowledge/document?path=missing.md").status,
-            404,
+        assert (
+            self.api.handle("GET", "/api/v1/knowledge/document?path=missing.md").status
+            == 404
         )
 
     def test_malformed_catalog_fails_closed(self) -> None:
         self.catalog_path.write_text("{}", encoding="utf-8")
         response = self.api.handle("GET", "/api/v1/knowledge")
-        self.assertEqual(response.status, 503)
-        self.assertEqual(
-            response.payload["error"]["code"], "catalog_schema_unsupported"
-        )
+        assert response.status == 503
+        assert response.payload["error"]["code"] == "catalog_schema_unsupported"
 
     def test_pagination_filters_and_read_only(self) -> None:
         page = self.api.handle("GET", "/api/v1/knowledge?limit=1&offset=1").payload
-        self.assertEqual(len(page["documents"]), 1)
-        self.assertEqual(page["summary"]["documents_matched"], 4)
+        assert len(page["documents"]) == 1
+        assert page["summary"]["documents_matched"] == 4
         filtered = self.api.handle(
             "GET", "/api/v1/knowledge?root_area=docs&document_type=guide&status=current"
         ).payload
-        self.assertEqual(filtered["summary"]["documents_matched"], 1)
+        assert filtered["summary"]["documents_matched"] == 1
         for target in ("?offset=-1", "?limit=abc", "?q=" + "a" * 121):
-            self.assertEqual(
-                self.api.handle("GET", "/api/v1/knowledge" + target).status, 400
-            )
+            assert self.api.handle("GET", "/api/v1/knowledge" + target).status == 400
         for method in ("POST", "PUT", "PATCH", "DELETE"):
-            self.assertEqual(self.api.handle(method, "/api/v1/knowledge").status, 405)
+            assert self.api.handle(method, "/api/v1/knowledge").status == 405
 
     def test_reload_excludes_bodies_and_unknown_relationships(self) -> None:
         self.api.handle("GET", "/api/v1/knowledge")
@@ -360,16 +349,16 @@ class KnowledgeApiTest(unittest.TestCase):
         )
         self.catalog_path.write_text(json.dumps(fixture))
         response = self.api.handle("GET", "/api/v1/knowledge/document?path=docs/one.md")
-        self.assertEqual(response.payload["document"]["title"], "Changed")
-        self.assertEqual(response.payload["document"]["related"], ["knowledge/two.md"])
-        self.assertEqual(response.payload["document"]["aliases"], ["Local Alias"])
-        self.assertNotIn("PRIVATE_", json.dumps(response.payload))
+        assert response.payload["document"]["title"] == "Changed"
+        assert response.payload["document"]["related"] == ["knowledge/two.md"]
+        assert response.payload["document"]["aliases"] == ["Local Alias"]
+        assert "PRIVATE_" not in json.dumps(response.payload)
 
     def test_duplicate_paths_fail_closed(self) -> None:
         fixture = json.loads(self.catalog_path.read_text())
         fixture["documents"].append(fixture["documents"][0])
         self.catalog_path.write_text(json.dumps(fixture))
-        self.assertEqual(self.api.handle("GET", "/api/v1/knowledge").status, 503)
+        assert self.api.handle("GET", "/api/v1/knowledge").status == 503
 
     def test_http_auth_cors_and_read_only_transport(self) -> None:
         class Handler(KnowledgeRequestHandler):
@@ -383,9 +372,10 @@ class KnowledgeApiTest(unittest.TestCase):
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         thread = Thread(target=server.serve_forever, daemon=True)
         thread.start()
-        connection = HTTPConnection(*server.server_address, timeout=3)
+        host, port = server.server_address[:2]
+        connection = HTTPConnection(str(host), port, timeout=3)
         try:
-            cases = (
+            cases: tuple[tuple[str, dict[str, str], int], ...] = (
                 ("GET", {}, 401),
                 ("GET", {"Authorization": "Bearer test-only-token"}, 200),
                 ("GET", {"Origin": "https://untrusted.invalid"}, 403),
@@ -396,16 +386,14 @@ class KnowledgeApiTest(unittest.TestCase):
                 connection.request(method, "/api/v1/knowledge", headers=headers)
                 response = connection.getresponse()
                 payload = response.read()
-                self.assertEqual(response.status, expected)
-                self.assertEqual(response.getheader("Cache-Control"), "no-store")
-                self.assertEqual(
-                    response.getheader("X-Content-Type-Options"), "nosniff"
-                )
+                assert response.status == expected
+                assert response.getheader("Cache-Control") == "no-store"
+                assert response.getheader("X-Content-Type-Options") == "nosniff"
                 if expected == 204:
-                    self.assertEqual(payload, b"")
-                    self.assertEqual(
-                        response.getheader("Access-Control-Allow-Origin"),
-                        "http://localhost:3300",
+                    assert payload == b""
+                    assert (
+                        response.getheader("Access-Control-Allow-Origin")
+                        == "http://localhost:3300"
                     )
         finally:
             connection.close()
