@@ -7,7 +7,7 @@ from unittest.mock import patch
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from service_auth import AuthError, AuthPolicy
+from service_auth import AuthError, AuthPolicy, check_read_auth
 
 
 class AuthTests(unittest.TestCase):
@@ -249,6 +249,16 @@ class AuthTests(unittest.TestCase):
             "PUBLIC_KEY_PLACEHOLDER",
         )
         self.assertFalse(policy.ready)
+
+    def test_extra_key_alone_is_partial_config(self):
+        policy = AuthPolicy(
+            "", "accounts-api", "", frozenset(), "accounts:read", "anything"
+        )
+        self.assertTrue(policy.configured)
+        self.assertFalse(policy.ready)
+        with self.assertRaises(AuthError) as ctx:
+            check_read_auth(policy, {}, environment="development", token="")
+        self.assertEqual(ctx.exception.status, 503)
 
     def test_extra_key_from_environment(self):
         with patch.dict(

@@ -99,7 +99,9 @@ class AuthPolicy:
 
     @property
     def configured(self) -> bool:
-        return bool(self.issuer or self.public_key or self.subjects)
+        return bool(
+            self.issuer or self.public_key or self.subjects or self.extra_public_key
+        )
 
     @property
     def ready(self) -> bool:
