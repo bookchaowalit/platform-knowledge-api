@@ -38,7 +38,9 @@ class AuthPolicy:
     public_key: str = field(repr=False)
     subjects: frozenset[str] = field(repr=False)
     required_scope: str
-    _key: RSAPublicKey | None = field(default=None, init=False, repr=False)
+    # Optional second trusted key, e.g. for a local MCP client that must not hold Solo Web's key.
+    extra_public_key: str = field(default="", repr=False)
+    _keys: tuple[RSAPublicKey, ...] = field(default=(), init=False, repr=False)
 
     def __post_init__(self):
         try:
@@ -54,7 +56,11 @@ class AuthPolicy:
                 and self.issuer == f"https://{origin.netloc}"
                 and origin.port != 0
             )
-            key = serialization.load_pem_public_key(self.public_key.encode())
+            keys = tuple(
+                serialization.load_pem_public_key(pem.encode())
+                for pem in (self.public_key, self.extra_public_key)
+                if pem
+            )
             if (
                 valid_origin
                 and self.audience
@@ -64,10 +70,13 @@ class AuthPolicy:
                     isinstance(sub, str) and 0 < len(sub) <= 512 and sub.strip() == sub
                     for sub in self.subjects
                 )
-                and isinstance(key, RSAPublicKey)
-                and key.key_size >= 2048
+                and keys
+                and all(
+                    isinstance(key, RSAPublicKey) and key.key_size >= 2048
+                    for key in keys
+                )
             ):
-                object.__setattr__(self, "_key", key)
+                object.__setattr__(self, "_keys", keys)
         except (ValueError, TypeError, UnicodeError):
             pass
 
@@ -83,6 +92,9 @@ class AuthPolicy:
                 if s.strip()
             ),
             required_scope,
+            os.environ.get(prefix + "AUTH_EXTRA_PUBLIC_KEY", "")
+            .strip()
+            .replace("\\n", "\n"),
         )
 
     @property
@@ -91,7 +103,7 @@ class AuthPolicy:
 
     @property
     def ready(self) -> bool:
-        return self._key is not None
+        return bool(self._keys)
 
     def authenticate(self, headers: Mapping[str, str]) -> Identity:
         if not self.ready:
@@ -118,28 +130,7 @@ class AuthPolicy:
                 k in header for k in ("jku", "jwk", "x5u", "x5c", "crit")
             ):
                 raise invalid
-            claims = jwt.decode(
-                token,
-                self._key,
-                algorithms=["RS256"],
-                issuer=self.issuer,
-                audience=self.audience,
-                leeway=5,
-                options={
-                    "strict_aud": True,
-                    "require": [
-                        "iss",
-                        "aud",
-                        "sub",
-                        "tenant_id",
-                        "scope",
-                        "iat",
-                        "nbf",
-                        "exp",
-                        "jti",
-                    ],
-                },
-            )
+            claims = self._decode(token, invalid)
             if claims["iss"] != self.issuer or claims["aud"] != self.audience:
                 raise invalid
             for name in ("iat", "nbf", "exp"):
@@ -176,6 +167,37 @@ class AuthPolicy:
             raise
         except (jwt.PyJWTError, ValueError, TypeError, OverflowError):
             raise invalid from None
+
+
+    def _decode(self, token: str, invalid: AuthError) -> dict:
+        # Try each trusted key; only a bad signature moves on to the next key.
+        for key in self._keys:
+            try:
+                return jwt.decode(
+                    token,
+                    key,
+                    algorithms=["RS256"],
+                    issuer=self.issuer,
+                    audience=self.audience,
+                    leeway=5,
+                    options={
+                        "strict_aud": True,
+                        "require": [
+                            "iss",
+                            "aud",
+                            "sub",
+                            "tenant_id",
+                            "scope",
+                            "iat",
+                            "nbf",
+                            "exp",
+                            "jti",
+                        ],
+                    },
+                )
+            except jwt.InvalidSignatureError:
+                continue
+        raise invalid
 
 
 def check_read_auth(

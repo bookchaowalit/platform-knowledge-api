@@ -89,6 +89,10 @@ Configure `KNOWLEDGE_API_AUTH_ISSUER` with the exact HTTPS origin of Solo Web,
 and `KNOWLEDGE_API_AUTH_SUBJECTS` with the comma-separated allowed OIDC owner
 subjects. See [.env.example](.env.example); provide configuration at runtime.
 The signing private key belongs only to Solo Web and is never copied to this image.
+Optional `KNOWLEDGE_API_AUTH_EXTRA_PUBLIC_KEY` adds one more trusted PEM RSA key
+(at least 2048 bits) for the local MCP below, so it never needs Solo Web's key.
+Tokens signed by it pass exactly the same issuer, audience, subject, tenant,
+scope and time checks. An invalid extra key fails closed (`/ready` 503).
 
 Reads require an RS256 JWT: `iss` matches that origin, `aud=knowledge-api`,
 `sub` is allowed, `tenant_id=owner`, `scope=knowledge:read`, and
@@ -126,6 +130,11 @@ token itself, per call, as the Solo Web BFF does: it reads Solo Web's signing ke
 (never printed or returned), signs a 60-second token fixed to this service's audience and scope, and sends it as the
 bearer. No tool argument can change the subject, audience or scope.
 
+The key file is the MCP's own key, not Solo Web's: its public half is set as
+`KNOWLEDGE_API_AUTH_EXTRA_PUBLIC_KEY` on the API, and the private half lives in
+Infisical `/knowledge-mcp` and in `~/.config/solo-web/service-private.pem`.
+Revoke it by unsetting that variable; Solo Web is not affected.
+
 | Variable | Meaning |
 |---|---|
 | `EMPIRE_KNOWLEDGE_API` | API base URL (env, else `~/.config/empire-platform/client.env`); https, http only on loopback |
@@ -134,8 +143,8 @@ bearer. No tool argument can change the subject, audience or scope.
 | `SOLO_WEB_OWNER_SUBJECTS_FILE` | default `~/.config/solo-web/owner-subjects.txt`, mode 600; the first subject is used |
 | `EMPIRE_TOKEN` | optional ready service JWT; used instead of minting (the key is then not read) |
 
-Trade-off: the signing key can mint tokens for every Solo Web service, so only run this MCP as the owner on a machine
-that already holds that key. A narrower alternative, if the key must not sit beside agents, is a Solo Web owner-session
+Trade-off: the MCP key is trusted only by this API, but anyone holding it can read the owner's catalog metadata, so
+keep it mode 600 on the owner's machine. A narrower alternative, if the key must not sit beside agents, is a Solo Web owner-session
 endpoint that issues a per-service token; set `EMPIRE_TOKEN` from it and the key is never read.
 
 Run: `uv sync --frozen --all-extras`, then `.venv/bin/knowledge-mcp` (see `.mcp.json`).

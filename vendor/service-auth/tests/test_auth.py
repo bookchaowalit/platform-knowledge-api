@@ -198,6 +198,78 @@ class AuthTests(unittest.TestCase):
             self.assertTrue(policy.configured)
             self.assertFalse(policy.ready)
 
+    def other_public(self):
+        return (
+            self.other_key.public_key()
+            .public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            .decode()
+        )
+
+    def test_extra_key_is_also_trusted(self):
+        policy = AuthPolicy(
+            "https://solo.example",
+            "accounts-api",
+            self.public,
+            frozenset({"oidc-owner"}),
+            "accounts:read",
+            self.other_public(),
+        )
+        self.assertTrue(policy.ready)
+        for key in (self.key, self.other_key):
+            self.assertEqual(
+                policy.authenticate(
+                    {"authorization": "Bearer " + self.token(key=key)}
+                ).subject,
+                "oidc-owner",
+            )
+        stranger = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        with self.assertRaises(AuthError) as ctx:
+            policy.authenticate({"authorization": "Bearer " + self.token(key=stranger)})
+        self.assertEqual(ctx.exception.status, 401)
+        # The extra key passes the same claim checks as the main key.
+        with self.assertRaises(AuthError) as ctx:
+            policy.authenticate(
+                {
+                    "authorization": "Bearer "
+                    + self.token({"sub": "intruder"}, key=self.other_key)
+                }
+            )
+        self.assertEqual(ctx.exception.status, 403)
+
+    def test_invalid_extra_key_fails_closed(self):
+        policy = AuthPolicy(
+            "https://solo.example",
+            "accounts-api",
+            self.public,
+            frozenset({"oidc-owner"}),
+            "accounts:read",
+            "PUBLIC_KEY_PLACEHOLDER",
+        )
+        self.assertFalse(policy.ready)
+
+    def test_extra_key_from_environment(self):
+        with patch.dict(
+            os.environ,
+            {
+                "TEST_AUTH_ISSUER": "https://solo.example",
+                "TEST_AUTH_PUBLIC_KEY": self.public.replace("\n", "\\n"),
+                "TEST_AUTH_EXTRA_PUBLIC_KEY": self.other_public().replace("\n", "\\n"),
+                "TEST_AUTH_SUBJECTS": "oidc-owner",
+            },
+            clear=True,
+        ):
+            policy = AuthPolicy.from_env("TEST_", "accounts-api", "accounts:read")
+            self.assertTrue(policy.ready)
+            self.assertEqual(
+                policy.authenticate(
+                    {"authorization": "Bearer " + self.token(key=self.other_key)}
+                ).subject,
+                "oidc-owner",
+            )
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
