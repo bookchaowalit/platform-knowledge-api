@@ -1,7 +1,7 @@
 # platform-knowledge-api
 Moved out of solo-empire `services/knowledge-api` on 2026-10-11 with its history (subtree split). Reads a generated document catalog JSON (`data/document-catalog.json`, configurable path via `KNOWLEDGE_API_CATALOG_PATH`). `vendor/service-auth` is a vendored copy of `bookchaowalit/platform-auth-sdk`.
 
-**Ownership.** The real catalog is private document metadata and is **not in git**: architecture-docs writes it into `data/document-catalog.json` of a local checkout (`task knowledge-api:catalog:sync`). To self-host, copy `data/document-catalog.example.json` to `data/document-catalog.json` (or point `KNOWLEDGE_API_CATALOG_PATH` at your own catalog). Check its shape with:
+**Ownership.** The real catalog is private document metadata and is **not in git**: architecture-docs generates it (`task docs:catalog` there) and [scripts/deploy_catalog.py](scripts/deploy_catalog.py) stages it as `data/document-catalog.json` of a local checkout and deploys it (see [Deploy](#deploy)). To self-host, copy `data/document-catalog.example.json` to `data/document-catalog.json` (or point `KNOWLEDGE_API_CATALOG_PATH` at your own catalog). Check its shape with:
 
 ```bash
 python3 scripts/validate_catalog.py             # schema_version, non-empty documents, unique paths
@@ -69,6 +69,27 @@ The repository root is the Docker build context (service + `vendor/service-auth`
 docker build -t solo-knowledge-api .
 railway up --ci --no-gitignore --service solo-knowledge-api   # uploads the git-ignored catalog; .railwayignore keeps the rest out
 ```
+
+The service is not on CD (a push does not deploy) because the catalog is never in git.
+Refresh and deploy it with one command, which stops at the first failed step:
+
+```bash
+export SOLO_ARCHITECTURE_DOCS_ROOT=/path/to/architecture-docs
+export EMPIRE_KNOWLEDGE_API=https://<api-host> SOLO_WEB_PUBLIC_ORIGIN=https://<solo-web-host>
+export KNOWLEDGE_API_RAILWAY_PROJECT=<project-id>   # omit in a railway-linked checkout
+python3 scripts/deploy_catalog.py --dry-run         # freshness + validate + stage only
+python3 scripts/deploy_catalog.py                   # ...then railway up and live verification
+```
+
+Steps: the generator check (`scripts/document_catalog.py --check` in architecture-docs) must pass;
+the source is validated and staged atomically; `railway up --ci --no-gitignore` uploads it; the
+script waits for `/ready` 200 and then requires the live `catalog.revision` (read with a JWT minted
+like the MCP's, see [MCP server](#mcp-server-knowledge-mcp)) to equal the staged snapshot's SHA-256.
+`--source FILE` deploys another catalog (no generator check); `--no-freshness-check` skips it.
+The generator runs on python3 from PATH outside this repository's virtualenv, because its
+output differs between Python versions; set `SOLO_ARCHITECTURE_DOCS_PYTHON` to pin another.
+Environment and service default to `production` / `solo-knowledge-api`
+(`KNOWLEDGE_API_RAILWAY_ENVIRONMENT`, `KNOWLEDGE_API_RAILWAY_SERVICE`). Nothing secret is printed.
 
 The image contains the declared catalog snapshot, service code and auth library;
 no document bodies or root repository mount. Its source path is explicitly
