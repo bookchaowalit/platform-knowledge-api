@@ -70,7 +70,7 @@ class AuthPolicy:
                     isinstance(sub, str) and 0 < len(sub) <= 512 and sub.strip() == sub
                     for sub in self.subjects
                 )
-                and keys
+                and self.public_key
                 and all(
                     isinstance(key, RSAPublicKey) and key.key_size >= 2048
                     for key in keys

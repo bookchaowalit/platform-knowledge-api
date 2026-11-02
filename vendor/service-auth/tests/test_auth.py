@@ -250,6 +250,17 @@ class AuthTests(unittest.TestCase):
         )
         self.assertFalse(policy.ready)
 
+    def test_extra_key_needs_the_main_key(self):
+        policy = AuthPolicy(
+            "https://solo.example",
+            "accounts-api",
+            "",
+            frozenset({"oidc-owner"}),
+            "accounts:read",
+            self.other_public(),
+        )
+        self.assertFalse(policy.ready)
+
     def test_extra_key_alone_is_partial_config(self):
         policy = AuthPolicy(
             "", "accounts-api", "", frozenset(), "accounts:read", "anything"
