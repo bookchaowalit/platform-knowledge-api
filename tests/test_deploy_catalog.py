@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import http.server
 import importlib.util
 import json
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -211,6 +213,14 @@ class MainTest(unittest.TestCase):
         assert run.calls == []
         assert self.dest.exists()
 
+    def test_url_flag_uses_the_api_url_policy(self):
+        run = Recorder()
+        code = self.run_main(
+            "--no-freshness-check", "--url", "http://api.example", run=run
+        )
+        assert code == 1
+        assert run.calls == []
+
     def test_full_run_deploys_and_verifies(self):
         run = Recorder()
         fetch = lambda url, token=None: (  # noqa: E731
@@ -253,6 +263,57 @@ class MainTest(unittest.TestCase):
         )
         assert code == 0
         assert run.calls[0][1] == str(docs)
+
+
+class FetchTest(unittest.TestCase):
+    """fetch_json against real local HTTP servers."""
+
+    def serve(self, handler):
+        server = http.server.HTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_port}"
+
+    def test_token_never_follows_a_redirect(self):
+        seen: list[str | None] = []
+
+        class Sink(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *_args):
+                pass
+
+        sink = self.serve(Sink)
+
+        class Redirect(Sink):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", sink + "/stolen")
+                self.end_headers()
+
+        status, _ = deploy.fetch_json(self.serve(Redirect) + "/x", "secret-token")
+        assert status == 302
+        assert seen == []
+
+    def test_json_body_and_bearer(self):
+        seen: list[str | None] = []
+
+        class Api(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                seen.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"ok": true}')
+
+            def log_message(self, *_args):
+                pass
+
+        assert deploy.fetch_json(self.serve(Api) + "/x", "t") == (200, {"ok": True})
+        assert seen == ["Bearer t"]
 
 
 if __name__ == "__main__":

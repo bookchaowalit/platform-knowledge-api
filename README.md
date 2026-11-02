@@ -71,14 +71,15 @@ railway up --ci --no-gitignore --service solo-knowledge-api   # uploads the git-
 ```
 
 The service is not on CD (a push does not deploy) because the catalog is never in git.
-Refresh and deploy it with one command, which stops at the first failed step:
+Refresh and deploy it with one command, which stops at the first failed step. Run it with
+`uv run` (after `uv sync`), because minting the verification JWT needs PyJWT and cryptography:
 
 ```bash
 export SOLO_ARCHITECTURE_DOCS_ROOT=/path/to/architecture-docs
 export EMPIRE_KNOWLEDGE_API=https://<api-host> SOLO_WEB_PUBLIC_ORIGIN=https://<solo-web-host>
 export KNOWLEDGE_API_RAILWAY_PROJECT=<project-id>   # omit in a railway-linked checkout
-python3 scripts/deploy_catalog.py --dry-run         # freshness + validate + stage only
-python3 scripts/deploy_catalog.py                   # ...then railway up and live verification
+uv run python scripts/deploy_catalog.py --dry-run   # freshness + validate + stage only
+uv run python scripts/deploy_catalog.py             # ...then railway up and live verification
 ```
 
 Steps: the generator check (`scripts/document_catalog.py --check` in architecture-docs) must pass;
@@ -89,7 +90,9 @@ like the MCP's, see [MCP server](#mcp-server-knowledge-mcp)) to equal the staged
 The generator runs on python3 from PATH outside this repository's virtualenv, because its
 output differs between Python versions; set `SOLO_ARCHITECTURE_DOCS_PYTHON` to pin another.
 Environment and service default to `production` / `solo-knowledge-api`
-(`KNOWLEDGE_API_RAILWAY_ENVIRONMENT`, `KNOWLEDGE_API_RAILWAY_SERVICE`). Nothing secret is printed.
+(`KNOWLEDGE_API_RAILWAY_ENVIRONMENT`, `KNOWLEDGE_API_RAILWAY_SERVICE`). `--url` must pass the same https-only check as
+`EMPIRE_KNOWLEDGE_API`, and requests never follow redirects, so the token stays on that host.
+Nothing secret is printed.
 
 The image contains the declared catalog snapshot, service code and auth library;
 no document bodies or root repository mount. Its source path is explicitly

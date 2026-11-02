@@ -11,7 +11,7 @@ repeatable path from the generator's output to the running service:
 4. wait for ``/ready``, then read ``catalog.revision`` with a minted service JWT
    and require it to equal the staged snapshot's SHA-256.
 
-    python3 scripts/deploy_catalog.py [--source FILE] [--dry-run] [--no-freshness-check]
+    uv run python scripts/deploy_catalog.py [--source FILE] [--dry-run] [--no-freshness-check]
 
 Environment: ``SOLO_ARCHITECTURE_DOCS_ROOT`` (default source), ``EMPIRE_KNOWLEDGE_API``
 (or ``--url``), ``SOLO_WEB_PUBLIC_ORIGIN`` and the MCP key files (see README),
@@ -140,12 +140,22 @@ def railway_up(repo: Path, target: Target, *, run: Run) -> None:
         raise DeployError("railway up failed (see its output above)")
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return (
+            None  # a 3xx becomes an HTTPError; the bearer token never leaves this host
+        )
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def fetch_json(url: str, token: str | None = None) -> tuple[int, Any]:
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     if token:
-        request.add_header("Authorization", "Bearer " + token)
+        request.add_unredirected_header("Authorization", "Bearer " + token)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with _OPENER.open(request, timeout=30) as response:
             return response.status, json.loads(response.read() or b"{}")
     except urllib.error.HTTPError as error:
         return error.code, {}
@@ -190,9 +200,11 @@ def _mint() -> str:
 
 
 def _api_url(environ: Mapping[str, str]) -> str:
-    return _load("knowledge_mcp", ROOT / "knowledge_mcp.py").api_url(
-        "EMPIRE_KNOWLEDGE_API", environ
-    )
+    module = _load("knowledge_mcp", ROOT / "knowledge_mcp.py")
+    try:
+        return module.api_url("EMPIRE_KNOWLEDGE_API", environ)
+    except module.ConfigError as error:
+        raise DeployError(str(error)) from None
 
 
 def main(
@@ -226,7 +238,10 @@ def main(
         print(f"staged {staged.documents} documents, revision {staged.revision}")
         if args.dry_run:
             return 0
-        base = args.url or _api_url(environ)
+        # --url goes through the same https-only policy as EMPIRE_KNOWLEDGE_API.
+        base = _api_url(
+            {**environ, "EMPIRE_KNOWLEDGE_API": args.url} if args.url else environ
+        )
         target = Target(
             environ.get("KNOWLEDGE_API_RAILWAY_PROJECT", ""),
             environ.get("KNOWLEDGE_API_RAILWAY_ENVIRONMENT", "production"),
