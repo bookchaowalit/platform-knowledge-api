@@ -11,6 +11,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import pytest
@@ -314,6 +315,27 @@ class FetchTest(unittest.TestCase):
 
         assert deploy.fetch_json(self.serve(Api) + "/x", "t") == (200, {"ok": True})
         assert seen == ["Bearer t"]
+
+
+class MissingExtraTest(unittest.TestCase):
+    def test_missing_mcp_extra_is_a_clear_deploy_error(self):
+        saved = sys.modules.pop("knowledge_mcp", None)
+        self.addCleanup(
+            lambda: sys.modules.update({"knowledge_mcp": saved}) if saved else None
+        )
+        real_import = __import__
+
+        def no_httpx(name, *args, **kwargs):
+            if name == "httpx":
+                raise ModuleNotFoundError("No module named 'httpx'")
+            return real_import(name, *args, **kwargs)
+
+        with (
+            unittest.mock.patch("builtins.__import__", no_httpx),
+            pytest.raises(deploy.DeployError, match="uv sync --extra mcp"),
+        ):
+            deploy._api_url({"EMPIRE_KNOWLEDGE_API": "https://api.example"})
+        assert "knowledge_mcp" not in sys.modules or saved
 
 
 if __name__ == "__main__":

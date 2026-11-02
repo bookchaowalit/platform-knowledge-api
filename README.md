@@ -72,7 +72,8 @@ railway up --ci --no-gitignore --service solo-knowledge-api   # uploads the git-
 
 The service is not on CD (a push does not deploy) because the catalog is never in git.
 Refresh and deploy it with one command, which stops at the first failed step. Run it with
-`uv run` (after `uv sync`), because minting the verification JWT needs PyJWT and cryptography:
+`uv run` after `uv sync --frozen --extra mcp`: the live check reuses the MCP's URL policy and
+JWT minting (httpx, mcp, PyJWT, cryptography), and a plain `uv sync` stops with that hint:
 
 ```bash
 export SOLO_ARCHITECTURE_DOCS_ROOT=/path/to/architecture-docs

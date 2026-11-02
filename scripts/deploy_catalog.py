@@ -195,12 +195,23 @@ def verify(
     raise DeployError(f"live revision {seen} != staged {expected}")
 
 
+def _mcp() -> Any:
+    """knowledge_mcp holds the URL policy and JWT minting; it needs the `mcp` extra."""
+    try:
+        return _load("knowledge_mcp", ROOT / "knowledge_mcp.py")
+    except ModuleNotFoundError as error:
+        sys.modules.pop("knowledge_mcp", None)
+        raise DeployError(
+            f"{error.name or 'a dependency'} is missing: run `uv sync --extra mcp` first"
+        ) from None
+
+
 def _mint() -> str:
-    return _load("knowledge_mcp", ROOT / "knowledge_mcp.py").mint()
+    return _mcp().mint()
 
 
 def _api_url(environ: Mapping[str, str]) -> str:
-    module = _load("knowledge_mcp", ROOT / "knowledge_mcp.py")
+    module = _mcp()
     try:
         return module.api_url("EMPIRE_KNOWLEDGE_API", environ)
     except module.ConfigError as error:
