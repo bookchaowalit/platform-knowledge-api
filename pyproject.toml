@@ -31,7 +31,7 @@ dev = [
 [project.scripts]
 knowledge-mcp = "knowledge_mcp:main"
 
-# solo-empire-service-auth is vendored (a copy of bookchaowalit/platform-auth-sdk, not on PyPI);
+# solo-empire-service-auth is vendored (from bookchaowalit/platform-auth-sdk, not on PyPI);
 # uv.lock records it as this local path, so CI and the image install the same copy.
 [tool.uv.sources]
 solo-empire-service-auth = { path = "vendor/service-auth" }
@@ -45,7 +45,8 @@ source = ["server", "_sentry", "knowledge_mcp", "document_store", "scripts"]
 
 [tool.ruff]
 target-version = "py311"
-# vendor/service-auth is a verbatim copy of bookchaowalit/platform-auth-sdk; lint it there.
+# vendor/service-auth started as a copy of bookchaowalit/platform-auth-sdk; this repo owns it now
+# (extra trusted keys exist only here) and tests it under vendor/service-auth/tests.
 extend-exclude = ["vendor"]
 
 [tool.ruff.lint]
