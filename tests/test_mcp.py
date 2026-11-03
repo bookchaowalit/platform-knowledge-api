@@ -15,9 +15,21 @@ import knowledge_mcp as mod
 from knowledge_mcp import build_server
 
 API_KEY = mod.URL_KEY
-READS = {"knowledge.search", "knowledge.document.get"}
-WRITES: set[str] = set()
-ARGS = {"knowledge.document.get": {"path": "docs/a.md"}}
+READS = {
+    "knowledge.search",
+    "knowledge.document.get",
+    "knowledge.store.list",
+    "knowledge.store.get",
+    "knowledge.store.history",
+}
+WRITES = {"knowledge.store.put", "knowledge.store.delete"}
+ARGS = {
+    "knowledge.document.get": {"path": "docs/a.md"},
+    "knowledge.store.get": {"path": "notes/a.md"},
+    "knowledge.store.history": {"path": "notes/a.md"},
+    "knowledge.store.put": {"path": "notes/a.md", "content": "# A"},
+    "knowledge.store.delete": {"path": "notes/a.md"},
+}
 SAMPLES = [
     (
         "knowledge.search",
@@ -32,6 +44,41 @@ SAMPLES = [
         "GET",
         "/api/v1/knowledge/document",
         {"path": "docs/a.md"},
+    ),
+    (
+        "knowledge.store.list",
+        {"prefix": "diary/", "limit": 50},
+        "GET",
+        "/api/v1/store/documents",
+        {"space": "knowledge-base", "prefix": "diary/", "limit": "50", "offset": "0"},
+    ),
+    (
+        "knowledge.store.get",
+        {"path": "notes/a.md", "version": 2},
+        "GET",
+        "/api/v1/store/document",
+        {"space": "knowledge-base", "path": "notes/a.md", "version": "2"},
+    ),
+    (
+        "knowledge.store.history",
+        {"path": "notes/a.md"},
+        "GET",
+        "/api/v1/store/history",
+        {"space": "knowledge-base", "path": "notes/a.md"},
+    ),
+    (
+        "knowledge.store.put",
+        {"path": "notes/a.md", "content": "# A", "if_version": 0},
+        "PUT",
+        "/api/v1/store/document",
+        {"space": "knowledge-base", "path": "notes/a.md"},
+    ),
+    (
+        "knowledge.store.delete",
+        {"path": "notes/a.md", "if_version": 3},
+        "DELETE",
+        "/api/v1/store/document",
+        {"space": "knowledge-base", "path": "notes/a.md", "if_version": "3"},
     ),
 ]
 DEFAULT_BODY: dict[str, object] = {"items": []}
@@ -392,3 +439,53 @@ def test_validation_errors_are_fixed_and_name_no_argument_or_value():
     with pytest.raises(ToolError, match="unknown_tool") as caught:
         call(srv, "x.UNTRUSTED_MARKER", {"a": "VALUE_MARKER"})
     assert "MARKER" not in str(caught.value) + repr(caught.value)
+
+
+def test_store_tools_call_the_api_with_their_own_scope():
+    fake = Fake()
+    srv = build_server(
+        fake.client(),
+        lambda: "read-tok",
+        write_token=lambda: "write-tok",
+        read_only=False,
+    ).server
+    call(srv, "knowledge.store.get", {"path": "notes/a.md"})
+    call(
+        srv,
+        "knowledge.store.put",
+        {"path": "notes/a.md", "content_base64": "IyBB", "visibility": "private"},
+    )
+    call(srv, "knowledge.store.delete", {"path": "notes/a.md"})
+    read, put, delete = fake.requests
+    assert read.headers["authorization"] == "Bearer read-tok"
+    assert put.headers["authorization"] == "Bearer write-tok"
+    assert delete.headers["authorization"] == "Bearer write-tok"
+    import json as _json
+
+    assert _json.loads(put.content) == {
+        "content_base64": "IyBB",
+        "visibility": "private",
+    }
+    with pytest.raises(ToolError, match="invalid_arguments"):
+        call(
+            srv,
+            "knowledge.store.put",
+            {"path": "a.md", "content": "x", "content_base64": "eA=="},
+        )
+    with pytest.raises(ToolError, match="invalid_arguments"):
+        call(srv, "knowledge.store.put", {"path": "a.md"})
+    assert len(fake.requests) == 3
+
+
+def test_write_tokens_are_minted_with_the_write_scope(env, keys):
+    token = mod.mint(env, scope=mod.WRITE_SCOPE)
+    write = AuthPolicy(ORIGIN, mod.AUDIENCE, keys[1], frozenset({SUB}), mod.WRITE_SCOPE)
+    assert (
+        write.authenticate({"authorization": f"Bearer {token}"}).scope
+        == "knowledge:write"
+    )
+    read = AuthPolicy(ORIGIN, mod.AUDIENCE, keys[1], frozenset({SUB}), mod.SCOPE)
+    with pytest.raises(Exception, match="scope"):
+        read.authenticate({"authorization": f"Bearer {token}"})
+    with pytest.raises(mod.ConfigError):
+        mod.mint(env, scope="admin:all")

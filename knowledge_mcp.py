@@ -1,8 +1,9 @@
-"""MCP server for the knowledge catalog: read-only tools over its authenticated HTTP API.
+"""MCP server for the knowledge catalog and document store, over its authenticated HTTP API.
 
 The backend trusts only short-lived RS256 service JWTs from Solo Web (``aud=knowledge-api``, ``scope=knowledge:read``,
 ``tenant_id=owner``, an allowlisted owner ``sub``). Backend auth is not relaxed. This process mints that same token
-for itself, as the BFF does, instead of holding a long-lived credential::
+for itself, as the BFF does, instead of holding a long-lived credential. Store writes
+(``knowledge.store.put``/``.delete``) mint a separate ``scope=knowledge:write`` token::
 
     EMPIRE_KNOWLEDGE_API=https://...        env, else the owner-only ~/.config/empire-platform/client.env
     SOLO_WEB_PUBLIC_ORIGIN=https://...   the JWT issuer (Solo Web's public origin; not a secret)
@@ -28,14 +29,14 @@ import uuid
 from collections.abc import Callable
 from datetime import date, datetime  # noqa: F401 - used by the tool models
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, InputRequiredResult
 from mcp_types import Tool as MCPTool
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 
@@ -212,8 +213,11 @@ class Toolbox:
         read_only: bool = False,
         empire_headers: bool = False,
         server: StrictMCPServer | None = None,
+        write_token: Callable[[], str] | None = None,
     ) -> None:
         self.server = server or StrictMCPServer(name, instructions=instructions)
+        # Write tools mint their own token (another scope); without one they reuse ``token``.
+        self.write_token = write_token or token
         self.client, self.token, self.read_only, self.empire_headers = (
             client,
             token,
@@ -229,9 +233,10 @@ class Toolbox:
         params: dict[str, Any] | None = None,
         body: Any = None,
         idempotency_key: str | None = None,
+        write: bool = False,
     ) -> Any:
         try:
-            bearer = clean_token(self.token())
+            bearer = clean_token((self.write_token if write else self.token)())
         except ConfigError:
             raise ToolFailed(
                 "401: unauthorized"
@@ -322,21 +327,61 @@ class DocumentRef(Strict):
     path: str = Field(min_length=1, max_length=500)
 
 
+SPACE_FIELD = Field(default="knowledge-base", pattern=r"^[a-z0-9][a-z0-9-]{0,62}$")
+
+
+class StoreList(Strict):
+    space: str = SPACE_FIELD
+    prefix: str = Field(default="", max_length=500)
+    limit: int = Field(default=100, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)
+
+
+class StoreRef(Strict):
+    space: str = SPACE_FIELD
+    path: str = Field(min_length=1, max_length=500)
+
+
+class StoreGet(StoreRef):
+    version: int | None = Field(default=None, ge=1)
+
+
+class StoreDelete(StoreRef):
+    if_version: int | None = Field(default=None, ge=0)
+
+
+class StorePut(StoreRef):
+    content: str | None = Field(default=None, max_length=5 * 1024 * 1024)
+    content_base64: str | None = Field(default=None, max_length=7 * 1024 * 1024)
+    media_type: str | None = Field(default=None, max_length=100)
+    visibility: Literal["private", "public"] | None = None
+    if_version: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def one_body(self) -> StorePut:
+        if (self.content is None) == (self.content_base64 is None):
+            raise ValueError("send exactly one of content or content_base64")
+        return self
+
+
 def build_server(
     client: httpx.Client,
     token: Callable[[], str],
     *,
     read_only: bool = True,
     server: StrictMCPServer | None = None,
+    write_token: Callable[[], str] | None = None,
 ) -> Toolbox:
     box = Toolbox(
         "knowledge",
-        "Solo Empire knowledge catalog (metadata only; document bodies stay in their "
-        "workspaces). Read-only.",
+        "Solo Empire knowledge: catalog metadata search, and the hosted document store "
+        "(knowledge.store.*), which holds the documents themselves. Store writes keep "
+        "every version; pass if_version from a read to avoid overwriting newer edits.",
         client,
         token,
         read_only=read_only,
         server=server,
+        write_token=write_token,
     )
 
     @box.tool(
@@ -355,11 +400,63 @@ def build_server(
     def document_get(a: DocumentRef) -> Any:
         return box.call("GET", "/api/v1/knowledge/document", params=query(a))
 
+    @box.tool(
+        "knowledge.store.list",
+        StoreList,
+        "List stored documents (metadata only) in a space, by path prefix.",
+    )
+    def store_list(a: StoreList) -> Any:
+        return box.call("GET", "/api/v1/store/documents", params=query(a))
+
+    @box.tool(
+        "knowledge.store.get",
+        StoreGet,
+        "Read one stored document's content (UTF-8 text or base64), optionally an old version.",
+    )
+    def store_get(a: StoreGet) -> Any:
+        return box.call("GET", "/api/v1/store/document", params=query(a))
+
+    @box.tool(
+        "knowledge.store.history",
+        StoreRef,
+        "Every version of one stored document, including deletes.",
+    )
+    def store_history(a: StoreRef) -> Any:
+        return box.call("GET", "/api/v1/store/history", params=query(a))
+
+    @box.tool(
+        "knowledge.store.put",
+        StorePut,
+        "Create or replace a stored document; if_version 0 creates only, N updates only "
+        "version N. The previous version is kept.",
+        write=True,
+    )
+    def store_put(a: StorePut) -> Any:
+        return box.call(
+            "PUT",
+            "/api/v1/store/document",
+            params={"space": a.space, "path": a.path},
+            body=a.model_dump(
+                mode="json", exclude_none=True, exclude={"space", "path"}
+            ),
+            write=True,
+        )
+
+    @box.tool(
+        "knowledge.store.delete",
+        StoreDelete,
+        "Delete a stored document; its history is kept and it can be written again.",
+        write=True,
+    )
+    def store_delete(a: StoreDelete) -> Any:
+        return box.call("DELETE", "/api/v1/store/document", params=query(a), write=True)
+
     return box
 
 
 AUDIENCE = "knowledge-api"
 SCOPE = "knowledge:read"
+WRITE_SCOPE = "knowledge:write"
 URL_KEY = "EMPIRE_KNOWLEDGE_API"
 TOKEN_LIFETIME = 60
 SUBJECT = re.compile(r"^[^\s\x00-\x1f\x7f]{1,512}$")
@@ -385,10 +482,12 @@ def issuer(environ: Any) -> str:
     return value
 
 
-def mint(environ: Any = None, now: float | None = None) -> str:
+def mint(environ: Any = None, now: float | None = None, *, scope: str = SCOPE) -> str:
     """A fresh service JWT for this service only, signed with Solo Web's service key."""
     import jwt  # PyJWT with cryptography, the same library the backends verify with
 
+    if scope not in {SCOPE, WRITE_SCOPE}:
+        raise ConfigError("unknown knowledge scope")
     environ = os.environ if environ is None else environ
     if environ.get("EMPIRE_TOKEN"):
         return clean_token(environ["EMPIRE_TOKEN"])
@@ -419,7 +518,7 @@ def mint(environ: Any = None, now: float | None = None) -> str:
         "aud": AUDIENCE,
         "sub": lines[0],
         "tenant_id": "owner",
-        "scope": SCOPE,
+        "scope": scope,
         "iat": issued,
         "nbf": issued,
         "exp": issued + TOKEN_LIFETIME,
@@ -440,7 +539,12 @@ def main() -> None:
     except ConfigError as exc:
         raise SystemExit(str(exc)) from None
     client = httpx.Client(base_url=url, timeout=30, follow_redirects=False)
-    build_server(client, mint).server.run("stdio")
+    build_server(
+        client,
+        mint,
+        read_only=False,
+        write_token=lambda: mint(scope=WRITE_SCOPE),
+    ).server.run("stdio")
 
 
 if __name__ == "__main__":

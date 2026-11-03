@@ -5,12 +5,16 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "solo-empire-knowledge-api"
 version = "0.1.0"
-description = "Read-only projection of generated document catalog metadata"
+description = "Document catalog metadata and the hosted document store"
 requires-python = ">=3.11"
-dependencies = ["solo-empire-service-auth>=0.1.0,<0.2", "sentry-sdk>=2.72,<3"]
+dependencies = [
+    "solo-empire-service-auth>=0.1.0,<0.2",
+    "sentry-sdk>=2.72,<3",
+    "psycopg[binary,pool]>=3.2,<4",
+]
 
 [tool.setuptools]
-py-modules = ["server", "_sentry", "knowledge_mcp"]
+py-modules = ["server", "_sentry", "knowledge_mcp", "document_store"]
 
 [project.optional-dependencies]
 mcp = ["mcp>=2.3,<3", "httpx>=0.27,<1"]  # knowledge-mcp (knowledge_mcp.py); not needed by the API image
@@ -20,6 +24,8 @@ dev = [
     "mcp>=2.3,<3",
     "httpx>=0.27,<1",
     "mypy>=2.4",
+    # Embedded Postgres for the SPEC-002 store tests (CI has no database service).
+    "pgserver>=0.1.4; python_version < '3.13'",
 ]
 
 [project.scripts]
@@ -35,7 +41,7 @@ testpaths = ["tests"]
 addopts = "-ra"
 
 [tool.coverage.run]
-source = ["server", "_sentry", "knowledge_mcp", "scripts"]
+source = ["server", "_sentry", "knowledge_mcp", "document_store", "scripts"]
 
 [tool.ruff]
 target-version = "py311"
@@ -53,7 +59,7 @@ ignore = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
-files = ["server.py", "_sentry.py", "knowledge_mcp.py", "scripts", "tests"]
+files = ["server.py", "_sentry.py", "knowledge_mcp.py", "document_store.py", "scripts", "tests"]
 # CI runs `mypy .`. Not checked here: the vendored copy (and its in-tree build), maintained in
 # platform-auth-sdk.
 exclude = ["^vendor/", "(^|/)build/"]
@@ -67,7 +73,7 @@ warn_unused_ignores = true
 # Service code: mypy --strict (the global-only strict flags are set above). tests/ stays gradual:
 # its fixtures and test functions are unannotated, so mypy checks only their call sites.
 [[tool.mypy.overrides]]
-module = ["server", "_sentry", "knowledge_mcp", "validate_catalog"]
+module = ["server", "_sentry", "knowledge_mcp", "document_store", "validate_catalog"]
 check_untyped_defs = true
 disallow_any_generics = true
 disallow_subclassing_any = true

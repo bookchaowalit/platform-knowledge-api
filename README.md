@@ -13,10 +13,10 @@ Test: `uv sync --frozen --all-extras && uv run pytest -q` (lint, types and cover
 
 # Solo Empire Knowledge API
 
-Independently runnable, read-only metadata service for the Knowledge app.
-Markdown remains canonical for humans and AI. This service reads only the
-generated document catalog; it does not open document bodies, SQLite, raw lake
-objects, or nested repositories. Metadata is owner-private, not public data.
+Independently runnable service for the Knowledge app. The catalog routes read only the
+generated document catalog (metadata); the document store routes (SPEC-002, below) hold
+document bodies in Postgres. It never opens SQLite, raw lake objects or nested
+repositories. Everything is owner-private, not public data.
 
 ## Run and verify
 
@@ -37,6 +37,41 @@ The listener defaults to `127.0.0.1:3430`. Configure `KNOWLEDGE_API_HOST`,
 accepts an isolated test catalog. No database migration or ingestion is needed.
 Refresh the catalog explicitly after source changes; file mtime triggers reload.
 Catalog replacement should be atomic. A request uses one consistent snapshot.
+
+## Document store (SPEC-002)
+
+Since 2026-11-03 this service also **stores documents themselves**, so content can leave
+Git (owner decision: repositories keep code and the registry; content lives on hosted
+services). The catalog routes above are unchanged; the store has its own routes:
+
+| Route | Scope | Purpose |
+|---|---|---|
+| `GET /api/v1/store/documents?space=&prefix=&limit=&offset=` | `knowledge:read` | list metadata (no bodies) |
+| `GET /api/v1/store/document?space=&path=[&version=]` | `knowledge:read` | content as `content` (UTF-8) or `content_base64` |
+| `GET /api/v1/store/history?space=&path=` | `knowledge:read` | every version, deletes included |
+| `PUT /api/v1/store/document?space=&path=` | `knowledge:write` | JSON `{content \| content_base64, media_type?, visibility?, if_version?}` |
+| `DELETE /api/v1/store/document?space=&path=[&if_version=]` | `knowledge:write` | delete; history is kept |
+
+- Every write adds a version; nothing is overwritten in place. `if_version: 0` creates only,
+  `if_version: N` updates only version N (else 409 `version_conflict`). An identical write is a no-op.
+- Paths are relative and checked before storage: no traversal, no `.git/`, `.ssh/`, `.env*`,
+  `*.pem`, `*.key`. A document is at most 5 MiB, a request at most 8 MiB.
+- Storage is Postgres (`KNOWLEDGE_STORE_DATABASE_URL`, runtime role with data grants only;
+  `KNOWLEDGE_STORE_SPACES`, default `knowledge-base`). Without a URL the routes answer 503
+  `store_unavailable` and `/ready` reports `store: disabled`; the store never gates readiness.
+- Create or update the tables with the owner role:
+  `KNOWLEDGE_STORE_OWNER_DATABASE_URL=... uv run python scripts/store_migrate.py --runtime-role <role>`.
+- Move a directory in, prove parity, or take a snapshot out (tokens minted like the MCP's):
+
+```bash
+uv run python scripts/store_sync.py push   --root ../knowledge-base --include diary/entries
+uv run python scripts/store_sync.py verify --root ../knowledge-base --include diary/entries
+uv run python scripts/store_sync.py pull   --out /tmp/knowledge-base-snapshot
+```
+
+The MCP adds `knowledge.store.list`, `.get`, `.history`, `.put` and `.delete`; writes mint a
+separate `knowledge:write` token. Tests run the store contract against an in-memory store and a
+real Postgres (embedded `pgserver`, or `KNOWLEDGE_STORE_TEST_DATABASE_URL`).
 
 ## Boundary and authentication
 

@@ -16,6 +16,8 @@ the ``KNOWLEDGE_API_AUTH_*`` policy before exposing the service outside local de
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import os
@@ -35,6 +37,7 @@ from urllib.parse import parse_qs, urlsplit
 from service_auth import AuthError, AuthPolicy, check_read_auth, is_loopback, readiness
 
 from _sentry import capture, init_sentry
+from document_store import PostgresStore, Store, StoreError
 
 init_sentry()
 
@@ -46,6 +49,11 @@ MAX_LIMIT = 100
 MAX_OFFSET = 5_000
 MAX_QUERY_LENGTH = 120
 MAX_PATH_LENGTH = 500
+# Store writes (SPEC-002): a 5 MiB document is about 6.7 MiB as base64 JSON.
+MAX_REQUEST_BYTES = 8 * 1024 * 1024
+WRITE_FIELDS = frozenset(
+    {"content", "content_base64", "media_type", "visibility", "if_version"}
+)
 SAFE_SEGMENT_RE = re.compile(r"^[^\x00]+$")
 ALIAS_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
 
@@ -410,6 +418,21 @@ class CatalogStore:
             return self._rows, self._by_path, self._meta
 
 
+def store_from_env() -> Store | None:
+    """The Postgres store when KNOWLEDGE_STORE_DATABASE_URL is set, else None (store off)."""
+    url = os.environ.get("KNOWLEDGE_STORE_DATABASE_URL", "").strip()
+    if not url:
+        return None
+    spaces = tuple(
+        item.strip()
+        for item in os.environ.get("KNOWLEDGE_STORE_SPACES", "knowledge-base").split(
+            ","
+        )
+        if item.strip()
+    )
+    return PostgresStore(url, spaces=spaces)
+
+
 class KnowledgeApi:
     """Transport-independent, read-only handler used by HTTP and tests."""
 
@@ -421,8 +444,11 @@ class KnowledgeApi:
         environment: str | None = None,
         allowed_origins: tuple[str, ...] | None = None,
         auth_policy: AuthPolicy | None = None,
+        write_policy: AuthPolicy | None = None,
+        store: Store | None = None,
     ) -> None:
         self.catalog = CatalogStore(catalog_path)
+        self.store = store if store is not None else store_from_env()
         self.token = (
             token
             if token is not None
@@ -436,6 +462,11 @@ class KnowledgeApi:
         self.auth_policy = auth_policy or AuthPolicy.from_env(
             "KNOWLEDGE_API_", "knowledge-api", "knowledge:read"
         )
+        # Same trusted keys and owner subjects; only the scope differs, so a read token
+        # can never write and a write token can never read.
+        self.write_policy = write_policy or AuthPolicy.from_env(
+            "KNOWLEDGE_API_", "knowledge-api", "knowledge:write"
+        )
         configured_origins = os.environ.get(
             "KNOWLEDGE_API_CORS_ORIGINS", "http://localhost:3300,http://localhost:3000"
         )
@@ -443,10 +474,12 @@ class KnowledgeApi:
             item.strip() for item in configured_origins.split(",") if item.strip()
         )
 
-    def _check_read_auth(self, headers: Mapping[str, str]) -> None:
+    def _check_read_auth(
+        self, headers: Mapping[str, str], policy: AuthPolicy | None = None
+    ) -> None:
         try:
             check_read_auth(
-                self.auth_policy,
+                policy or self.auth_policy,
                 headers,
                 environment=self.environment,
                 token=self.token,
@@ -456,6 +489,16 @@ class KnowledgeApi:
 
     def _ready(self) -> Response:
         status, payload = readiness(self.auth_policy, self.environment, self.catalog)
+        # The store is reported, not gated on: a cold or missing database must not take
+        # the catalog down with it.
+        if self.store is None:
+            payload["store"] = "disabled"
+        else:
+            try:
+                self.store.ping()
+                payload["store"] = "available"
+            except Exception:  # noqa: BLE001 - any failure is "unavailable"; the error text stays private
+                payload["store"] = "unavailable"
         return Response(status, payload)
 
     @staticmethod
@@ -684,6 +727,143 @@ class KnowledgeApi:
             },
         )
 
+    @staticmethod
+    def _one(query: Mapping[str, list[str]], name: str, code: str) -> str:
+        values = query.get(name, [])
+        if len(values) != 1 or not values[0]:
+            raise ApiError(400, f"{name} is required", code=code)
+        return values[0]
+
+    @staticmethod
+    def _int(
+        query: Mapping[str, list[str]], name: str, default: int | None
+    ) -> int | None:
+        values = query.get(name, [])
+        if not values:
+            return default
+        if len(values) != 1 or not values[0].isdigit() or len(values[0]) > 9:
+            raise ApiError(
+                400, f"{name} must be a non-negative integer", code=f"invalid_{name}"
+            )
+        return int(values[0])
+
+    @staticmethod
+    def _write_body(body: bytes | None) -> dict[str, Any]:
+        try:
+            payload = json.loads(body or b"")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise ApiError(400, "body must be JSON", code="invalid_json") from None
+        invalid = ApiError(
+            400, "body does not match the write contract", code="invalid_body"
+        )
+        if not isinstance(payload, dict) or set(payload) - WRITE_FIELDS:
+            raise invalid
+        if ("content" in payload) == ("content_base64" in payload):
+            raise invalid
+        if "content" in payload and not isinstance(payload["content"], str):
+            raise invalid
+        if "content_base64" in payload:
+            raw = payload["content_base64"]
+            try:
+                if not isinstance(raw, str):
+                    raise ValueError
+                payload["content_bytes"] = base64.b64decode(raw, validate=True)
+            except (ValueError, binascii.Error):
+                raise invalid from None
+        else:
+            payload["content_bytes"] = payload["content"].encode("utf-8")
+        for name in ("media_type", "visibility"):
+            if name in payload and not isinstance(payload[name], str):
+                raise invalid
+        version = payload.get("if_version")
+        if version is not None and (
+            isinstance(version, bool) or not isinstance(version, int)
+        ):
+            raise invalid
+        return payload
+
+    def _store_route(
+        self,
+        method: str,
+        path: str,
+        query: Mapping[str, list[str]],
+        headers: Mapping[str, str],
+        body: bytes | None,
+    ) -> Response:
+        routes = {
+            "/api/v1/store/documents": {"GET"},
+            "/api/v1/store/document": {"GET", "PUT", "DELETE"},
+            "/api/v1/store/history": {"GET"},
+        }
+        if path not in routes:
+            raise ApiError(404, "route not found", code="not_found")
+        writing = method in {"PUT", "DELETE"}
+        self._check_read_auth(
+            headers, self.write_policy if writing else self.auth_policy
+        )
+        if method not in routes[path]:
+            raise ApiError(405, "method not allowed", code="method_not_allowed")
+        if self.store is None:
+            raise ApiError(
+                503, "document store is not configured", code="store_unavailable"
+            )
+        store = self.store
+        space = self._one(query, "space", "missing_space")
+        if path == "/api/v1/store/documents":
+            page = store.list(
+                space,
+                prefix=(query.get("prefix") or [""])[0],
+                limit=self._int(query, "limit", 100) or 0,
+                offset=self._int(query, "offset", 0) or 0,
+            )
+            return Response(
+                200,
+                {
+                    "space": space,
+                    "documents": [meta.to_payload() for meta in page.documents],
+                    "total": page.total,
+                },
+            )
+        doc_path = self._one(query, "path", "missing_path")
+        if path == "/api/v1/store/history":
+            versions = store.history(space, doc_path)
+            return Response(
+                200,
+                {
+                    "space": space,
+                    "versions": [m.to_payload(with_deleted=True) for m in versions],
+                },
+            )
+        if method == "GET":
+            document = store.get(
+                space, doc_path, version=self._int(query, "version", None)
+            )
+            return Response(200, {"space": space, "document": document.to_payload()})
+        if method == "DELETE":
+            meta = store.delete(
+                space, doc_path, if_version=self._int(query, "if_version", None)
+            )
+            return Response(
+                200, {"space": space, "document": meta.to_payload(with_deleted=True)}
+            )
+        payload = self._write_body(body)
+        result = store.put(
+            space,
+            doc_path,
+            payload["content_bytes"],
+            media_type=payload.get("media_type"),
+            visibility=payload.get("visibility", "private"),
+            if_version=payload.get("if_version"),
+        )
+        return Response(
+            201 if result.changed and result.meta.version == 1 else 200,
+            {
+                "space": space,
+                "document": result.meta.to_payload(),
+                "changed": result.changed,
+            },
+        )
+
     def handle(
         self,
         method: str,
@@ -692,7 +872,6 @@ class KnowledgeApi:
         headers: Mapping[str, str] | None = None,
         body: bytes | None = None,
     ) -> Response:
-        del body
         request_headers = {
             str(key).lower(): str(value) for key, value in (headers or {}).items()
         }
@@ -714,6 +893,8 @@ class KnowledgeApi:
                         "timestamp": utc_now(),
                     },
                 )
+            if path.startswith("/api/v1/store/"):
+                return self._store_route(method, path, query, request_headers, body)
             if path.startswith("/api/v1/knowledge"):
                 self._check_read_auth(request_headers)
                 if method != "GET":
@@ -727,7 +908,7 @@ class KnowledgeApi:
             if method == "GET" and path == "/api/v1/knowledge/document":
                 return self._detail(query)
             raise ApiError(404, "route not found", code="not_found")
-        except ApiError as exc:
+        except (ApiError, StoreError) as exc:
             return Response(
                 exc.status, {"error": {"code": exc.code, "message": exc.message}}
             )
@@ -776,10 +957,52 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 origin=None,
             )
             return
+        body: bytes | None = None
+        if self.command in {"PUT", "POST", "PATCH", "DELETE"}:
+            body, refusal = self._read_body()
+            if refusal is not None:
+                self.close_connection = True
+                self._write(refusal, origin=origin)
+                return
         response = self.api.handle(
-            self.command, self.path, headers=dict(self.headers.items())
+            self.command, self.path, headers=dict(self.headers.items()), body=body
         )
         self._write(response, origin=origin)
+
+    def _read_body(self) -> tuple[bytes | None, Response | None]:
+        if self.headers.get("Transfer-Encoding"):
+            return None, Response(
+                411,
+                {
+                    "error": {
+                        "code": "length_required",
+                        "message": "send Content-Length",
+                    }
+                },
+            )
+        raw = self.headers.get("Content-Length", "0").strip()
+        if not raw.isdigit():
+            return None, Response(
+                400,
+                {
+                    "error": {
+                        "code": "invalid_length",
+                        "message": "invalid Content-Length",
+                    }
+                },
+            )
+        length = int(raw)
+        if length > MAX_REQUEST_BYTES:
+            return None, Response(
+                413,
+                {
+                    "error": {
+                        "code": "request_too_large",
+                        "message": "request body is larger than 8 MiB",
+                    }
+                },
+            )
+        return (self.rfile.read(length) if length else b""), None
 
     def _write(self, response: Response, *, origin: str | None) -> None:
         encoded = (
@@ -798,8 +1021,12 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         if self.command == "OPTIONS":
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Accept, Authorization")
+            self.send_header(
+                "Access-Control-Allow-Methods", "GET, PUT, DELETE, OPTIONS"
+            )
+            self.send_header(
+                "Access-Control-Allow-Headers", "Accept, Authorization, Content-Type"
+            )
         self.end_headers()
         if response.status != HTTPStatus.NO_CONTENT:
             self.wfile.write(encoded)
