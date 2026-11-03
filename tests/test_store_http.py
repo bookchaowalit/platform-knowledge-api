@@ -328,3 +328,37 @@ def test_readiness_never_waits_on_a_slow_store(catalog: Path) -> None:
     assert api._probe is not None
     api._probe.join(2)
     assert api.handle("GET", "/ready").payload["store"] == "available"
+
+
+def test_an_unauthorized_write_is_refused_before_the_body_is_read(
+    catalog: Path,
+) -> None:
+    keys = Keys()
+
+    class Handler(KnowledgeRequestHandler):
+        api = KnowledgeApi(
+            catalog,
+            environment="production",
+            auth_policy=keys.policy("knowledge:read"),
+            write_policy=keys.policy("knowledge:write"),
+            store=MemoryStore(spaces=(SPACE,)),
+        )
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    connection = HTTPConnection(str(host), int(port), timeout=5)
+    try:
+        # Declares a body it never sends: the server must answer without waiting for it.
+        connection.putrequest("PUT", DOC)
+        connection.putheader("Content-Length", str(MAX_REQUEST_BYTES))
+        connection.endheaders()
+        response = connection.getresponse()
+        assert response.status == 401
+        response.read()
+    finally:
+        connection.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)

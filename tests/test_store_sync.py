@@ -99,11 +99,21 @@ def test_pull_writes_each_document_inside_the_target(
     client.put(SPACE, "diary/2026/11/03/a.md", "บันทึก".encode(), if_version=0)
     client.put(SPACE, "assets/x.png", b"\x89PNG\x00\xff", if_version=0)
     client.put(SPACE, "notes/c.md", b"c", if_version=0)
+    # Changed after the listing: the snapshot keeps the listed version.
+    listed = client.list_all
+
+    def list_then_change(space: str, prefix: str = "") -> dict:
+        result = listed(space, prefix)
+        client.put(SPACE, "notes/c.md", b"c changed", if_version=1)
+        return result
+
+    client.list_all = list_then_change  # type: ignore[method-assign]
     out = tmp_path / "snapshot"
     count = store_sync.pull(client, SPACE, out)
     assert count == 3
     assert (out / "diary/2026/11/03/a.md").read_text(encoding="utf-8") == "บันทึก"
     assert (out / "assets/x.png").read_bytes() == b"\x89PNG\x00\xff"
+    assert (out / "notes/c.md").read_bytes() == b"c"
     # Private content: owner-only directories and files.
     assert (
         out.stat().st_mode & 0o777,

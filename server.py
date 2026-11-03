@@ -889,6 +889,28 @@ class KnowledgeApi:
             },
         )
 
+    def preauthorize(
+        self, method: str, target: str, headers: Mapping[str, str]
+    ) -> Response | None:
+        """Check authorization before a request body is read; None when it may proceed."""
+        request_headers = {str(k).lower(): str(v) for k, v in headers.items()}
+        path = urlsplit(target).path.rstrip("/") or "/"
+        if path.startswith("/api/v1/store/"):
+            policy = (
+                self.write_policy if method in {"PUT", "DELETE"} else self.auth_policy
+            )
+        elif path.startswith("/api/v1/knowledge"):
+            policy = self.auth_policy
+        else:
+            return None
+        try:
+            self._check_read_auth(request_headers, policy)
+        except ApiError as exc:
+            return Response(
+                exc.status, {"error": {"code": exc.code, "message": exc.message}}
+            )
+        return None
+
     def handle(
         self,
         method: str,
@@ -984,7 +1006,12 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             return
         body: bytes | None = None
         if self.command in {"PUT", "POST", "PATCH", "DELETE"}:
-            body, refusal = self._read_body()
+            # Authorize before reading: an anonymous client never makes the server read 16 MiB.
+            refusal = self.api.preauthorize(
+                self.command, self.path, dict(self.headers.items())
+            )
+            if refusal is None:
+                body, refusal = self._read_body()
             if refusal is not None:
                 self.close_connection = True
                 self._write(refusal, origin=origin)

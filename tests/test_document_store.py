@@ -218,3 +218,15 @@ def test_migration_grants_the_runtime_role_data_access_only(
     monkeypatch.delenv("KNOWLEDGE_STORE_OWNER_DATABASE_URL")
     with pytest.raises(SystemExit):
         store_migrate.main(["--runtime-role", role])
+
+
+def test_a_document_and_a_folder_cannot_share_a_path(store: Store) -> None:
+    store.put(SPACE, "notes/a.md", b"a")
+    for path in ("notes/a.md/child.md", "notes"):
+        with pytest.raises(StoreError) as clash:
+            store.put(SPACE, path, b"x")
+        assert (clash.value.status, clash.value.code) == (409, "path_conflict")
+    # Updating an existing document is not a clash, and a deleted path frees the name.
+    assert store.put(SPACE, "notes/a.md", b"a2").meta.version == 2
+    store.delete(SPACE, "notes/a.md")
+    assert store.put(SPACE, "notes/a.md/child.md", b"x").meta.version == 1

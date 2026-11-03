@@ -221,6 +221,18 @@ def check_if_version(if_version: int | None) -> None:
         raise StoreError(400, "invalid_if_version", "if_version must be 0 or more")
 
 
+def parent_paths(path: str) -> list[str]:
+    """Every directory above path: a/b/c.md -> [a, a/b]."""
+    parts = path.split("/")[:-1]
+    return ["/".join(parts[: i + 1]) for i in range(len(parts))]
+
+
+def path_conflict() -> StoreError:
+    return StoreError(
+        409, "path_conflict", "a document and a folder cannot share one path"
+    )
+
+
 def digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
@@ -332,6 +344,14 @@ class MemoryStore(_Spaces):
             current_version = current[0].version if current else 0
             if if_version is not None and if_version != current_version:
                 raise conflict()
+            if current is None:
+                live = {
+                    p for (s, p) in self._versions if s == space and self._current(s, p)
+                }
+                if any(parent in live for parent in parent_paths(path)) or any(
+                    other.startswith(path + "/") for other in live
+                ):
+                    raise path_conflict()
             if (
                 current
                 and current[0].sha256 == sha
@@ -559,6 +579,14 @@ class PostgresStore(_Spaces):
             current_version = current_meta.version if current_meta else 0
             if if_version is not None and if_version != current_version:
                 raise conflict()
+            if current_meta is None:
+                clash = conn.execute(
+                    f"SELECT 1 FROM {self._documents} WHERE space = %s"
+                    " AND (path = ANY(%s) OR starts_with(path, %s)) LIMIT 1",
+                    (space, parent_paths(path), path + "/"),
+                ).fetchone()
+                if clash:
+                    raise path_conflict()
             if (
                 current_meta
                 and current_meta.sha256 == sha

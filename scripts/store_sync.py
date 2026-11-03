@@ -129,10 +129,11 @@ class StoreClient:
             if not page["documents"] or offset >= page["total"]:
                 return found
 
-    def get(self, space: str, path: str) -> bytes:
-        document = self._call(
-            "GET", "/api/v1/store/document", {"space": space, "path": path}
-        )["document"]
+    def get(self, space: str, path: str, *, version: int | None = None) -> bytes:
+        params: dict[str, Any] = {"space": space, "path": path}
+        if version is not None:
+            params["version"] = version
+        document = self._call("GET", "/api/v1/store/document", params)["document"]
         if document["encoding"] == "utf-8":
             return str(document["content"]).encode("utf-8")
         return base64.b64decode(document["content_base64"])
@@ -263,7 +264,9 @@ def pull(client: StoreClient, space: str, out: Path) -> int:
             (out.resolve() / parent).mkdir(mode=0o700, exist_ok=True)
         fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "wb") as handle:
-            handle.write(client.get(space, path))
+            # The version from the listing: the snapshot is one consistent point in time
+            # even if documents change while it is being pulled.
+            handle.write(client.get(space, path, version=int(remote[path]["version"])))
     return len(remote)
 
 
