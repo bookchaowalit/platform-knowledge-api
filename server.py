@@ -49,8 +49,8 @@ MAX_LIMIT = 100
 MAX_OFFSET = 5_000
 MAX_QUERY_LENGTH = 120
 MAX_PATH_LENGTH = 500
-# Store writes (SPEC-002): a 5 MiB document is about 6.7 MiB as base64 JSON.
-MAX_REQUEST_BYTES = 8 * 1024 * 1024
+# Store writes (SPEC-002): a 10 MiB document is about 13.4 MiB as base64 JSON.
+MAX_REQUEST_BYTES = 16 * 1024 * 1024
 WRITE_FIELDS = frozenset(
     {"content", "content_base64", "media_type", "visibility", "if_version"}
 )
@@ -998,7 +998,7 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 {
                     "error": {
                         "code": "request_too_large",
-                        "message": "request body is larger than 8 MiB",
+                        "message": "request body is larger than 16 MiB",
                     }
                 },
             )

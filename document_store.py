@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from threading import RLock
 from typing import Any, Protocol
 
-MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 MAX_PATH_LENGTH = 500
 MAX_LIST_LIMIT = 1000
 VISIBILITIES = frozenset({"private", "public"})
@@ -199,7 +199,7 @@ def check_write(
     content: bytes, media_type: str | None, visibility: str, path: str
 ) -> str:
     if len(content) > MAX_DOCUMENT_BYTES:
-        raise StoreError(413, "document_too_large", "document is larger than 5 MiB")
+        raise StoreError(413, "document_too_large", "document is larger than 10 MiB")
     if visibility not in VISIBILITIES:
         raise StoreError(400, "invalid_visibility", "visibility is private or public")
     resolved = media_type or guess_media_type(path)

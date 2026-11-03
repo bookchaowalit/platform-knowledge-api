@@ -55,7 +55,7 @@ services). The catalog routes above are unchanged; the store has its own routes:
 - Every write adds a version; nothing is overwritten in place. `if_version: 0` creates only,
   `if_version: N` updates only version N (else 409 `version_conflict`). An identical write is a no-op.
 - Paths are relative and checked before storage: no traversal, no `.git/`, `.ssh/`, `.env*`,
-  `*.pem`, `*.key`. A document is at most 5 MiB, a request at most 8 MiB.
+  `*.pem`, `*.key`. A document is at most 10 MiB, a request at most 16 MiB.
 - Storage is Postgres (`KNOWLEDGE_STORE_DATABASE_URL`, runtime role with data grants only;
   `KNOWLEDGE_STORE_SPACES`, default `knowledge-base`). Without a URL the routes answer 503
   `store_unavailable` and `/ready` reports `store: disabled`; the store never gates readiness.

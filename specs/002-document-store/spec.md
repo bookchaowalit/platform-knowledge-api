@@ -79,7 +79,7 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs, `docs/architecture/decision
 - **Test:** `tests/test_document_store.py::test_unsafe_paths_and_unknown_spaces_are_refused`
 
 ### AC-07 — Size limits
-- **Given** a body over 5 MiB, or a request over 8 MiB
+- **Given** a body over 10 MiB, or a request over 16 MiB
 - **When** it is PUT
 - **Then** 413 `document_too_large` / `request_too_large` before anything is stored
 - **Test:** `tests/test_document_store.py::test_oversized_documents_are_a_413`
@@ -174,3 +174,4 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs, `docs/architecture/decision
 | Version | Date | Change | Approved by |
 |---|---|---|---|
 | 1.0 | 2026-11-03 | Phase 1 scope | owner (scope) |
+| 1.1 | 2026-11-03 | Limits 10 MiB per document / 16 MiB per request: knowledge-base holds a 5.06 MiB CSV | AC-07 | owner (scope) |

@@ -352,8 +352,8 @@ class StoreDelete(StoreRef):
 
 
 class StorePut(StoreRef):
-    content: str | None = Field(default=None, max_length=5 * 1024 * 1024)
-    content_base64: str | None = Field(default=None, max_length=7 * 1024 * 1024)
+    content: str | None = Field(default=None, max_length=10 * 1024 * 1024)
+    content_base64: str | None = Field(default=None, max_length=14 * 1024 * 1024)
     media_type: str | None = Field(default=None, max_length=100)
     # Publishing (visibility=public) is an owner decision, not an agent tool argument.
     visibility: Literal["private"] | None = None
