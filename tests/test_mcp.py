@@ -28,7 +28,7 @@ ARGS = {
     "knowledge.store.get": {"path": "notes/a.md"},
     "knowledge.store.history": {"path": "notes/a.md"},
     "knowledge.store.put": {"path": "notes/a.md", "content": "# A"},
-    "knowledge.store.delete": {"path": "notes/a.md"},
+    "knowledge.store.delete": {"path": "notes/a.md", "if_version": 1},
 }
 SAMPLES = [
     (
@@ -455,7 +455,7 @@ def test_store_tools_call_the_api_with_their_own_scope():
         "knowledge.store.put",
         {"path": "notes/a.md", "content_base64": "IyBB", "visibility": "private"},
     )
-    call(srv, "knowledge.store.delete", {"path": "notes/a.md"})
+    call(srv, "knowledge.store.delete", {"path": "notes/a.md", "if_version": 2})
     read, put, delete = fake.requests
     assert read.headers["authorization"] == "Bearer read-tok"
     assert put.headers["authorization"] == "Bearer write-tok"
@@ -474,7 +474,42 @@ def test_store_tools_call_the_api_with_their_own_scope():
         )
     with pytest.raises(ToolError, match="invalid_arguments"):
         call(srv, "knowledge.store.put", {"path": "a.md"})
+    # Agents cannot publish, and cannot delete without naming the version they read.
+    with pytest.raises(ToolError, match="invalid_arguments"):
+        call(
+            srv,
+            "knowledge.store.put",
+            {"path": "a.md", "content": "x", "visibility": "public"},
+        )
+    with pytest.raises(ToolError, match="invalid_arguments"):
+        call(srv, "knowledge.store.delete", {"path": "a.md"})
     assert len(fake.requests) == 3
+
+
+def test_main_is_read_only_unless_writes_are_opted_in(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_build(client, token, *, read_only, write_token=None):
+        seen.update(read_only=read_only, write_token=write_token)
+
+        class Box:
+            class server:
+                @staticmethod
+                def run(transport):
+                    seen["transport"] = transport
+
+        return Box
+
+    monkeypatch.setattr(mod, "build_server", fake_build)
+    monkeypatch.setattr(mod, "mint", lambda *a, **k: "tok")
+    monkeypatch.setenv(API_KEY, "https://api.example")
+    monkeypatch.delenv("KNOWLEDGE_MCP_WRITE", raising=False)
+    mod.main()
+    assert (seen["read_only"], seen["write_token"]) == (True, None)
+    monkeypatch.setenv("KNOWLEDGE_MCP_WRITE", "1")
+    mod.main()
+    assert seen["read_only"] is False
+    assert callable(seen["write_token"])
 
 
 def test_write_tokens_are_minted_with_the_write_scope(env, keys):

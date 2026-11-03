@@ -347,14 +347,16 @@ class StoreGet(StoreRef):
 
 
 class StoreDelete(StoreRef):
-    if_version: int | None = Field(default=None, ge=0)
+    # Required: an agent can only delete the exact version it has read.
+    if_version: int = Field(ge=1)
 
 
 class StorePut(StoreRef):
     content: str | None = Field(default=None, max_length=5 * 1024 * 1024)
     content_base64: str | None = Field(default=None, max_length=7 * 1024 * 1024)
     media_type: str | None = Field(default=None, max_length=100)
-    visibility: Literal["private", "public"] | None = None
+    # Publishing (visibility=public) is an owner decision, not an agent tool argument.
+    visibility: Literal["private"] | None = None
     if_version: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
@@ -539,11 +541,13 @@ def main() -> None:
     except ConfigError as exc:
         raise SystemExit(str(exc)) from None
     client = httpx.Client(base_url=url, timeout=30, follow_redirects=False)
+    # Store writes are opt-in per MCP registration (KNOWLEDGE_MCP_WRITE=1); default read-only.
+    writable = os.environ.get("KNOWLEDGE_MCP_WRITE", "").strip() == "1"
     build_server(
         client,
         mint,
-        read_only=False,
-        write_token=lambda: mint(scope=WRITE_SCOPE),
+        read_only=not writable,
+        write_token=(lambda: mint(scope=WRITE_SCOPE)) if writable else None,
     ).server.run("stdio")
 
 

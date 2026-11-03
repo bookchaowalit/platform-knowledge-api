@@ -69,8 +69,10 @@ uv run python scripts/store_sync.py verify --root ../knowledge-base --include di
 uv run python scripts/store_sync.py pull   --out /tmp/knowledge-base-snapshot
 ```
 
-The MCP adds `knowledge.store.list`, `.get`, `.history`, `.put` and `.delete`; writes mint a
-separate `knowledge:write` token. Tests run the store contract against an in-memory store and a
+The MCP adds `knowledge.store.list`, `.get`, `.history`, `.put` and `.delete`. Writes are
+off unless the MCP registration sets `KNOWLEDGE_MCP_WRITE=1`; they then mint a separate
+`knowledge:write` token. An agent can only write private documents (publishing is an owner
+step) and must pass the `if_version` it read to delete. Tests run the store contract against an in-memory store and a
 real Postgres (embedded `pgserver`, or `KNOWLEDGE_STORE_TEST_DATABASE_URL`).
 
 ## Boundary and authentication
