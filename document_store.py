@@ -28,7 +28,8 @@ SPACE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 # Directory or file names that look like credentials or repository internals are refused,
 # so a careless sync can never upload them.
 FORBIDDEN_SEGMENTS = frozenset({".git", ".ssh", ".gnupg", ".aws"})
-FORBIDDEN_NAME_RE = re.compile(r"^(\.env(\..*)?|.*\.(pem|key|p12|pfx))$", re.IGNORECASE)
+# Every .env* name (.env, .env.local, .envrc, .env-prod, ...) is refused.
+FORBIDDEN_NAME_RE = re.compile(r"^(\.env.*|.*\.(pem|key|p12|pfx))$", re.IGNORECASE)
 TEXT_MEDIA = {
     ".md": "text/markdown",
     ".mdx": "text/markdown",

@@ -306,3 +306,25 @@ def test_http_transport_reads_the_request_body_within_limits(
         assert "DELETE" in methods
     finally:
         connection.close()
+
+
+def test_readiness_never_waits_on_a_slow_store(catalog: Path) -> None:
+    import threading
+
+    release = threading.Event()
+
+    class Slow(MemoryStore):
+        def ping(self) -> None:
+            release.wait(10)
+
+    api = dev_api(catalog, Slow(spaces=(SPACE,)))
+    started = time.monotonic()
+    first = api.handle("GET", "/ready")
+    assert time.monotonic() - started < 2
+    assert first.payload["store"] == "checking"
+    # A second /ready does not start a second probe while one is still running.
+    assert api.handle("GET", "/ready").payload["store"] == "checking"
+    release.set()
+    assert api._probe is not None
+    api._probe.join(2)
+    assert api.handle("GET", "/ready").payload["store"] == "available"

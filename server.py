@@ -30,7 +30,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import RLock
+from threading import RLock, Thread
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -51,6 +51,8 @@ MAX_QUERY_LENGTH = 120
 MAX_PATH_LENGTH = 500
 # Store writes (SPEC-002): a 10 MiB document is about 13.4 MiB as base64 JSON.
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
+# /ready waits this long at most for the store probe (Docker HEALTHCHECK times out at 3 s).
+STORE_PROBE_WAIT = 1.0
 WRITE_FIELDS = frozenset(
     {"content", "content_base64", "media_type", "visibility", "if_version"}
 )
@@ -449,6 +451,9 @@ class KnowledgeApi:
     ) -> None:
         self.catalog = CatalogStore(catalog_path)
         self.store = store if store is not None else store_from_env()
+        self._probe_lock = RLock()
+        self._probe: Thread | None = None
+        self._store_state = "checking"
         self.token = (
             token
             if token is not None
@@ -491,15 +496,35 @@ class KnowledgeApi:
         status, payload = readiness(self.auth_policy, self.environment, self.catalog)
         # The store is reported, not gated on: a cold or missing database must not take
         # the catalog down with it.
-        if self.store is None:
-            payload["store"] = "disabled"
-        else:
-            try:
-                self.store.ping()
-                payload["store"] = "available"
-            except Exception:  # noqa: BLE001 - any failure is "unavailable"; the error text stays private
-                payload["store"] = "unavailable"
+        payload["store"] = self._store_status()
         return Response(status, payload)
+
+    def _store_status(self) -> str:
+        """The store's last probe result; /ready never waits on a cold database.
+
+        One background probe runs at a time and /ready waits at most STORE_PROBE_WAIT
+        seconds for it, so a Neon resume (6-9 s) or pool wait cannot hold up the
+        health check. Until a probe finishes the status is "checking"."""
+        if self.store is None:
+            return "disabled"
+        store = self.store
+        with self._probe_lock:
+            probe = self._probe
+            if probe is None or not probe.is_alive():
+
+                def run() -> None:
+                    try:
+                        store.ping()
+                        result = "available"
+                    except Exception:  # noqa: BLE001 - any failure is "unavailable"; the error text stays private
+                        result = "unavailable"
+                    self._store_state = result
+
+                probe = Thread(target=run, daemon=True)
+                self._probe = probe
+                probe.start()
+        probe.join(STORE_PROBE_WAIT)
+        return self._store_state
 
     @staticmethod
     def _public_document(

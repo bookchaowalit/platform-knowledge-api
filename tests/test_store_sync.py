@@ -98,6 +98,9 @@ def test_pull_writes_each_document_inside_the_target(
     assert (out / "assets/x.png").read_bytes() == b"\x89PNG\x00\xff"
     with pytest.raises(store_sync.SyncError):
         store_sync.safe_target(out, "../escape.md")
+    # A second pull into the same directory is refused, so stale files cannot linger.
+    with pytest.raises(store_sync.SyncError, match="new or empty"):
+        store_sync.pull(client, SPACE, out)
 
 
 def test_the_cli_pushes_verifies_and_pulls(

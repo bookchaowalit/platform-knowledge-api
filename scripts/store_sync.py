@@ -243,6 +243,10 @@ def safe_target(out: Path, path: str) -> Path:
 
 
 def pull(client: StoreClient, space: str, out: Path) -> int:
+    """Write a fresh snapshot. out must be new or empty, so no file deleted in the
+    store can linger from an earlier pull."""
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        raise SyncError("pull needs a new or empty --out directory")
     out.mkdir(parents=True, exist_ok=True)
     remote = client.list_all(space)
     for path in sorted(remote):
