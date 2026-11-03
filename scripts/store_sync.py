@@ -110,24 +110,21 @@ class StoreClient:
         return result
 
     def list_all(self, space: str, prefix: str = "") -> dict[str, dict[str, Any]]:
+        # Keyset paging (`after` = last path seen): a write between pages can neither
+        # skip nor repeat a document, as an offset would.
         found: dict[str, dict[str, Any]] = {}
-        offset = 0
+        after = ""
         while True:
             page = self._call(
                 "GET",
                 "/api/v1/store/documents",
-                {
-                    "space": space,
-                    "prefix": prefix,
-                    "limit": self.page,
-                    "offset": offset,
-                },
+                {"space": space, "prefix": prefix, "limit": self.page, "after": after},
             )
             for meta in page["documents"]:
                 found[meta["path"]] = meta
-            offset += len(page["documents"])
-            if not page["documents"] or offset >= page["total"]:
+            if len(page["documents"]) < self.page:
                 return found
+            after = page["documents"][-1]["path"]
 
     def get(self, space: str, path: str, *, version: int | None = None) -> bytes:
         params: dict[str, Any] = {"space": space, "path": path}

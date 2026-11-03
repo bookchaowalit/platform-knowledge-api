@@ -230,3 +230,37 @@ def test_a_document_and_a_folder_cannot_share_a_path(store: Store) -> None:
     assert store.put(SPACE, "notes/a.md", b"a2").meta.version == 2
     store.delete(SPACE, "notes/a.md")
     assert store.put(SPACE, "notes/a.md/child.md", b"x").meta.version == 1
+
+
+def test_keyset_paging_survives_writes_between_pages(store: Store) -> None:
+    for path in ("a.md", "b.md", "c.md", "d.md"):
+        store.put(SPACE, path, path.encode())
+    first = store.list(SPACE, limit=2)
+    assert [m.path for m in first.documents] == ["a.md", "b.md"]
+    # A delete before the cursor would make offset=2 skip c.md; `after` does not.
+    store.delete(SPACE, "a.md")
+    second = store.list(SPACE, limit=2, after=first.documents[-1].path)
+    assert [m.path for m in second.documents] == ["c.md", "d.md"]
+    assert second.total == 3
+    with pytest.raises(StoreError) as bad:
+        store.list(SPACE, after="../x")
+    assert bad.value.code == "invalid_path"
+
+
+def test_a_write_locks_its_parent_paths_too(database_url: str) -> None:
+    schema = f"t_{uuid.uuid4().hex[:12]}"
+    pg = PostgresStore(database_url, spaces=(SPACE,), schema=schema)
+    pg.migrate()
+    try:
+        with pg.pool.connection() as conn, conn.transaction():
+            pg._lock_path(conn, SPACE, "a/b/c.md")
+            held = conn.execute(
+                "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory'"
+                " AND pid = pg_backend_pid()"
+            ).fetchone()
+        # a, a/b and a/b/c.md: a writer of `a` or `a/b` waits on the same lock.
+        assert held is not None
+        assert held[0] == 3
+    finally:
+        pg.drop_schema()
+        pg.close()

@@ -112,7 +112,13 @@ class Page:
 
 class Store(Protocol):
     def list(
-        self, space: str, *, prefix: str = "", limit: int = 100, offset: int = 0
+        self,
+        space: str,
+        *,
+        prefix: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        after: str = "",
     ) -> Page: ...
 
     def get(self, space: str, path: str, *, version: int | None = None) -> Document: ...
@@ -190,6 +196,12 @@ def check_prefix(prefix: str) -> str:
     probe = prefix.removesuffix("/")
     check_path(probe)
     return prefix
+
+
+def check_after(after: str) -> None:
+    """A keyset cursor is the last path of the previous page."""
+    if after:
+        check_path(after)
 
 
 def check_page(limit: int, offset: int) -> None:
@@ -285,11 +297,18 @@ class MemoryStore(_Spaces):
         return versions[-1][0].version if versions else 0
 
     def list(
-        self, space: str, *, prefix: str = "", limit: int = 100, offset: int = 0
+        self,
+        space: str,
+        *,
+        prefix: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        after: str = "",
     ) -> Page:
         self.check_space(space)
         check_prefix(prefix)
         check_page(limit, offset)
+        check_after(after)
         with self._lock:
             rows = [
                 current[0]
@@ -299,7 +318,9 @@ class MemoryStore(_Spaces):
                 and (current := self._current(space, path))
             ]
         rows.sort(key=lambda meta: meta.path)
-        return Page(rows[offset : offset + limit], len(rows))
+        # total counts the whole prefix; `after` only moves the window (keyset paging).
+        window = [meta for meta in rows if meta.path > after] if after else rows
+        return Page(window[offset : offset + limit], len(rows))
 
     def get(self, space: str, path: str, *, version: int | None = None) -> Document:
         self.check_space(space)
@@ -491,11 +512,18 @@ class PostgresStore(_Spaces):
         )
 
     def list(
-        self, space: str, *, prefix: str = "", limit: int = 100, offset: int = 0
+        self,
+        space: str,
+        *,
+        prefix: str = "",
+        limit: int = 100,
+        offset: int = 0,
+        after: str = "",
     ) -> Page:
         self.check_space(space)
         check_prefix(prefix)
         check_page(limit, offset)
+        check_after(after)
         # starts_with avoids LIKE wildcards in the prefix.
         where = "space = %s AND starts_with(path, %s)"
         with self.pool.connection() as conn:
@@ -503,10 +531,13 @@ class PostgresStore(_Spaces):
                 f"SELECT count(*) FROM {self._documents} WHERE {where}",
                 (space, prefix),
             ).fetchone()
+            # Keyset paging: `after` (the last path seen) survives inserts and deletes
+            # between pages, where an offset would skip or repeat rows.
             rows = conn.execute(
                 f"SELECT {META_COLUMNS} FROM {self._documents} WHERE {where}"
+                ' AND path COLLATE "C" > %s'
                 ' ORDER BY path COLLATE "C" LIMIT %s OFFSET %s',
-                (space, prefix, limit, offset),
+                (space, prefix, after, limit, offset),
             ).fetchall()
         total = int(total_row[0]) if total_row else 0
         return Page([self._meta(row) for row in rows], total)
@@ -547,11 +578,14 @@ class PostgresStore(_Spaces):
         return [self._meta(row, deleted=bool(row[7])) for row in rows]
 
     def _lock_path(self, conn: Any, space: str, path: str) -> None:
-        # Serialise writers of one path, including the first create of a new path.
-        conn.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"{self.schema}:{space}:{path}",),
-        )
+        # Serialise writers of one path, including the first create of a new path, and
+        # also lock every parent: writers of `a` and `a/b.md` then share the lock on `a`,
+        # so the file/folder clash check cannot race. Ascending order avoids deadlocks.
+        for key in sorted([*parent_paths(path), path]):
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"{self.schema}:{space}:{key}",),
+            )
 
     def put(
         self,

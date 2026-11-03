@@ -124,7 +124,7 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs, `docs/architecture/decision
 
 | Interface | Change | Contract |
 |---|---|---|
-| `GET /api/v1/store/documents` | new | `space`, `prefix`, `limit` 1–1000, `offset` ≥ 0 → `{documents: [meta], total}` |
+| `GET /api/v1/store/documents` | new | `space`, `prefix`, `limit` 1–1000, `offset` ≥ 0, `after` (keyset cursor: last path seen; preferred, since writes between pages cannot skip a row) → `{documents: [meta], total}` |
 | `GET /api/v1/store/document` | new | `space`, `path`, optional `version` → meta + `content` (UTF-8 text) or `content_base64` |
 | `GET /api/v1/store/history` | new | `space`, `path` → `{versions: [meta + deleted]}` |
 | `PUT /api/v1/store/document` | new | query `space`, `path`; JSON `{content | content_base64, media_type?, visibility?, if_version?}` → meta + `changed` |
@@ -175,3 +175,4 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs, `docs/architecture/decision
 |---|---|---|---|
 | 1.0 | 2026-11-03 | Phase 1 scope | owner (scope) |
 | 1.1 | 2026-11-03 | Limits 10 MiB per document / 16 MiB per request: knowledge-base holds a 5.06 MiB CSV | AC-07 | owner (scope) |
+| 1.2 | 2026-11-03 | Keyset `after` paging (store_sync uses it); writes lock every parent path, so a file/folder clash cannot race | owner (scope) |

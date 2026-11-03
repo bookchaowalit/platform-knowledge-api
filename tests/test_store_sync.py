@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -175,3 +176,26 @@ def test_api_errors_are_reported_by_status_and_code_only(api: KnowledgeApi) -> N
     with pytest.raises(store_sync.SyncError, match="could not be reached") as caught:
         broken.get(SPACE, "a.md")
     assert "secret" not in str(caught.value)
+
+
+def test_list_all_does_not_skip_a_document_when_one_is_deleted_mid_listing(
+    api: KnowledgeApi,
+) -> None:
+    client = client_for(api)  # page size 2
+    for path in ("a.md", "b.md", "c.md", "d.md", "e.md"):
+        client.put(SPACE, path, path.encode(), if_version=0)
+    call = client._call
+    store = api.store
+    assert store is not None
+    deleted: list[str] = []
+
+    def delete_after_first_page(
+        method: str, route: str, params: dict[str, Any], **kwargs: Any
+    ) -> dict[str, Any]:
+        result = call(method, route, params, **kwargs)
+        if route.endswith("/documents") and not deleted:
+            deleted.append(store.delete(SPACE, "a.md").path)
+        return result
+
+    client._call = delete_after_first_page  # type: ignore[assignment]
+    assert sorted(client.list_all(SPACE)) == ["a.md", "b.md", "c.md", "d.md", "e.md"]

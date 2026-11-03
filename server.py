@@ -840,6 +840,7 @@ class KnowledgeApi:
                 prefix=(query.get("prefix") or [""])[0],
                 limit=self._int(query, "limit", 100) or 0,
                 offset=self._int(query, "offset", 0) or 0,
+                after=(query.get("after") or [""])[0],
             )
             return Response(
                 200,
