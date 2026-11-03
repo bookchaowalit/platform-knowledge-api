@@ -1405,7 +1405,7 @@ provides-extras = ["mcp", "dev"]
 
 [[package]]
 name = "solo-empire-service-auth"
-version = "0.1.0"
+version = "0.1.1"
 source = { directory = "vendor/service-auth" }
 dependencies = [
     { name = "pyjwt", extra = ["crypto"] },

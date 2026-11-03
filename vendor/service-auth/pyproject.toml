@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "solo-empire-service-auth"
-version = "0.1.0"
+version = "0.1.1"
 description = "Owner-scoped JWT verification for Solo Empire metadata services"
 requires-python = ">=3.11"
 dependencies = ["PyJWT[crypto]>=2.10.1,<3"]

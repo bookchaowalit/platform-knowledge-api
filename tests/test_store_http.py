@@ -212,7 +212,7 @@ class Keys:
             "iat": now,
             "nbf": now,
             "exp": now + 60,
-            "jti": f"fixture-{scope}",
+            "jti": f"fixture-{scope}-{id(self)}",
         }
         return {
             "Authorization": "Bearer " + jwt.encode(claims, self.key, algorithm="RS256")
@@ -362,3 +362,42 @@ def test_an_unauthorized_write_is_refused_before_the_body_is_read(
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_each_extra_key_is_trusted_and_a_garbled_extra_key_disables_auth(
+    catalog: Path,
+) -> None:
+    # The MCP and the Knowledge Hub reader each hold their own key; both are listed.
+    solo, mcp, hub = Keys(), Keys(), Keys()
+    policy = AuthPolicy(
+        "https://solo.example",
+        "knowledge-api",
+        solo.public,
+        frozenset({"fixture-owner"}),
+        "knowledge:read",
+        mcp.public + hub.public,
+    )
+    api = KnowledgeApi(
+        catalog,
+        environment="production",
+        auth_policy=policy,
+        store=MemoryStore(spaces=(SPACE,)),
+    )
+    path = f"/api/v1/store/documents?space={SPACE}"
+    for keys in (solo, mcp, hub):
+        assert (
+            api.handle("GET", path, headers=keys.headers("knowledge:read")).status
+            == 200
+        )
+    assert (
+        api.handle("GET", path, headers=Keys().headers("knowledge:read")).status == 401
+    )
+    garbled = AuthPolicy(
+        "https://solo.example",
+        "knowledge-api",
+        solo.public,
+        frozenset({"fixture-owner"}),
+        "knowledge:read",
+        "not a key",
+    )
+    assert not garbled.ready

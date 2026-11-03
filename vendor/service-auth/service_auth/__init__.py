@@ -5,6 +5,7 @@ from __future__ import annotations
 import ipaddress
 import math
 import os
+import re
 import secrets
 import time
 from collections.abc import Mapping
@@ -38,7 +39,8 @@ class AuthPolicy:
     public_key: str = field(repr=False)
     subjects: frozenset[str] = field(repr=False)
     required_scope: str
-    # Optional second trusted key, e.g. for a local MCP client that must not hold Solo Web's key.
+    # Optional extra trusted keys (one or more PEM blocks), e.g. for a local MCP client or the
+    # Knowledge Hub reader, each holding its own key rather than Solo Web's.
     extra_public_key: str = field(default="", repr=False)
     _keys: tuple[RSAPublicKey, ...] = field(default=(), init=False, repr=False)
 
@@ -56,9 +58,16 @@ class AuthPolicy:
                 and self.issuer == f"https://{origin.netloc}"
                 and origin.port != 0
             )
+            extra = re.findall(
+                r"-----BEGIN PUBLIC KEY-----.+?-----END PUBLIC KEY-----",
+                self.extra_public_key,
+                re.S,
+            )
+            if self.extra_public_key and not extra:
+                raise ValueError("extra public key holds no PEM block")
             keys = tuple(
                 serialization.load_pem_public_key(pem.encode())
-                for pem in (self.public_key, self.extra_public_key)
+                for pem in (self.public_key, *extra)
                 if pem
             )
             if (
