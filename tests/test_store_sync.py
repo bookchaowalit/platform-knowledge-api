@@ -217,3 +217,32 @@ def test_a_listing_that_straddles_a_file_folder_swap_is_taken_again(
     client.list_all = lambda space, prefix="": {"a": {}, "a/b": {}}  # type: ignore[method-assign]
     with pytest.raises(store_sync.SyncError, match="kept changing"):
         store_sync.pull(client, SPACE, tmp_path / "snap2")
+
+
+def test_push_with_prune_mirrors_deletes_and_renames(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    for path in ("keep.md", "gone.md", "a"):
+        client.put(SPACE, path, path.encode(), if_version=0)
+    source = tmp_path / "docs"
+    (source / "a").mkdir(parents=True)
+    (source / "keep.md").write_bytes(b"keep.md")
+    # `a` became a folder: the old file must go before a/b.md can be written.
+    (source / "a" / "b.md").write_bytes(b"b")
+    files = store_sync.collect(source, paths=["keep.md", "a/b.md"])
+    plain = store_sync.push(client, SPACE, files)
+    assert plain.failed == ["a/b.md"]  # without prune the old file blocks it
+    report = store_sync.push(client, SPACE, files, prune=True)
+    assert (report.deleted, report.written, report.unchanged, report.failed) == (
+        2,
+        1,
+        1,
+        [],
+    )
+    parity = store_sync.verify(client, SPACE, files)
+    assert (parity.missing, parity.different, parity.extra) == ([], [], [])
+    # Deletes keep history: the old file is still readable at its version.
+    store = api.store
+    assert store is not None
+    assert [v.deleted for v in store.history(SPACE, "gone.md")] == [False, True]

@@ -52,6 +52,7 @@ class LocalFile:
 class PushReport:
     written: int = 0
     unchanged: int = 0
+    deleted: int = 0
     failed: list[str] = field(default_factory=list)
 
 
@@ -135,6 +136,14 @@ class StoreClient:
             return str(document["content"]).encode("utf-8")
         return base64.b64decode(document["content_base64"])
 
+    def delete(self, space: str, path: str, *, if_version: int) -> dict[str, Any]:
+        return self._call(
+            "DELETE",
+            "/api/v1/store/document",
+            {"space": space, "path": path, "if_version": if_version},
+            write=True,
+        )
+
     def put(
         self, space: str, path: str, content: bytes, *, if_version: int | None
     ) -> dict[str, Any]:
@@ -197,9 +206,23 @@ def collect(root: Path, *, paths: Iterable[str]) -> list[LocalFile]:
     return [files[p] for p in sorted(files)]
 
 
-def push(client: StoreClient, space: str, files: list[LocalFile]) -> PushReport:
+def push(
+    client: StoreClient, space: str, files: list[LocalFile], *, prune: bool = False
+) -> PushReport:
+    """Write changed files. With prune, the space mirrors the source: documents that are
+    no longer there are deleted first (history keeps them), so a file that became a
+    folder frees its name before the new paths are written."""
     remote = client.list_all(space)
     report = PushReport()
+    if prune:
+        keep = {local.path for local in files}
+        for path in sorted(set(remote) - keep):
+            try:
+                client.delete(space, path, if_version=int(remote[path]["version"]))
+                report.deleted += 1
+                del remote[path]
+            except SyncError:
+                report.failed.append(path)
     for local in files:
         meta = remote.get(local.path)
         if meta and meta["sha256"] == local.sha256:
@@ -314,6 +337,11 @@ def main(argv: list[str] | None = None) -> int:
         help="also every file under this directory",
     )
     parser.add_argument("--out", type=Path, help="snapshot directory (pull)")
+    parser.add_argument(
+        "--prune",
+        action="store_true",
+        help="push: delete store documents that are not in the source (a mirror)",
+    )
     args = parser.parse_args(argv)
     try:
         client = connect()
@@ -329,9 +357,10 @@ def main(argv: list[str] | None = None) -> int:
             root, paths=[*git_files(root), *included_files(root, args.include)]
         )
         if args.command == "push":
-            report = push(client, args.space, files)
+            report = push(client, args.space, files, prune=args.prune)
             print(
-                f"written {report.written}, unchanged {report.unchanged}, failed {len(report.failed)}"
+                f"written {report.written}, unchanged {report.unchanged}, "
+                f"deleted {report.deleted}, failed {len(report.failed)}"
             )
             for path in report.failed:
                 print(f"  failed: {path}")

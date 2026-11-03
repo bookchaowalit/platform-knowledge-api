@@ -67,7 +67,12 @@ services). The catalog routes above are unchanged; the store has its own routes:
 uv run python scripts/store_sync.py push   --root ../knowledge-base --include diary/entries
 uv run python scripts/store_sync.py verify --root ../knowledge-base --include diary/entries
 uv run python scripts/store_sync.py pull   --out /tmp/knowledge-base-snapshot
+# A mirror of a Git checkout (architecture-docs CI does this on every push to main):
+uv run python scripts/store_sync.py push --space architecture-docs --root ../architecture-docs --prune
 ```
+
+`--prune` deletes store documents that are no longer in the source, before it writes, so a
+file that became a folder frees its name; deleted versions stay in the history.
 
 The MCP adds `knowledge.store.list`, `.get`, `.history`, `.put` and `.delete`. Writes are
 off unless the MCP registration sets `KNOWLEDGE_MCP_WRITE=1`; they then mint a separate
