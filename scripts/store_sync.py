@@ -246,6 +246,25 @@ def safe_target(out: Path, path: str) -> Path:
     return target
 
 
+def clashes(paths: Iterable[str]) -> list[str]:
+    """Paths that are also another path's folder (a and a/b): never true at one instant,
+    so a listing that holds both straddled a delete-and-recreate."""
+    names = set(paths)
+    return sorted(
+        p for p in names if any(f"{p}/" == q[: len(p) + 1] for q in names if q != p)
+    )
+
+
+def consistent_listing(
+    client: StoreClient, space: str, attempts: int = 3
+) -> dict[str, dict[str, Any]]:
+    for _ in range(attempts):
+        remote = client.list_all(space)
+        if not clashes(remote):
+            return remote
+    raise SyncError("the store kept changing during listing; try again")
+
+
 def pull(client: StoreClient, space: str, out: Path) -> int:
     """Write a fresh snapshot. out must be new or empty, so no file deleted in the
     store can linger from an earlier pull."""
@@ -254,7 +273,7 @@ def pull(client: StoreClient, space: str, out: Path) -> int:
     # The snapshot holds private documents: owner-only directories and files.
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     out.chmod(0o700)
-    remote = client.list_all(space)
+    remote = consistent_listing(client, space)
     for path in sorted(remote):
         target = safe_target(out, path)
         for parent in reversed(target.relative_to(out.resolve()).parents[:-1]):

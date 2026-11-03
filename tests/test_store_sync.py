@@ -199,3 +199,21 @@ def test_list_all_does_not_skip_a_document_when_one_is_deleted_mid_listing(
 
     client._call = delete_after_first_page  # type: ignore[assignment]
     assert sorted(client.list_all(SPACE)) == ["a.md", "b.md", "c.md", "d.md", "e.md"]
+
+
+def test_a_listing_that_straddles_a_file_folder_swap_is_taken_again(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a", b"file", if_version=0)
+    listings = [
+        {"a": {"version": 1}, "a/b": {"version": 1}},
+        {"a": {"version": 1}},
+    ]
+    client.list_all = lambda space, prefix="": listings.pop(0)  # type: ignore[method-assign]
+    assert store_sync.pull(client, SPACE, tmp_path / "snap") == 1
+    assert (tmp_path / "snap" / "a").read_bytes() == b"file"
+    assert store_sync.clashes(["x", "x/y", "xy", "z/w"]) == ["x"]
+    client.list_all = lambda space, prefix="": {"a": {}, "a/b": {}}  # type: ignore[method-assign]
+    with pytest.raises(store_sync.SyncError, match="kept changing"):
+        store_sync.pull(client, SPACE, tmp_path / "snap2")

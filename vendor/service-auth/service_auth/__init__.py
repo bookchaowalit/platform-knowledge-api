@@ -58,11 +58,15 @@ class AuthPolicy:
                 and self.issuer == f"https://{origin.netloc}"
                 and origin.port != 0
             )
-            extra = re.findall(
-                r"-----BEGIN PUBLIC KEY-----.+?-----END PUBLIC KEY-----",
-                self.extra_public_key,
-                re.S,
-            )
+            extra = [
+                match.group(0)
+                for match in re.finditer(
+                    r"-----BEGIN PUBLIC KEY-----.+?-----END PUBLIC KEY-----"
+                    r"|-----BEGIN RSA PUBLIC KEY-----.+?-----END RSA PUBLIC KEY-----",
+                    self.extra_public_key,
+                    re.S,
+                )
+            ]
             if self.extra_public_key and not extra:
                 raise ValueError("extra public key holds no PEM block")
             keys = tuple(

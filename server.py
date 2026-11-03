@@ -50,6 +50,7 @@ MAX_OFFSET = 5_000
 MAX_QUERY_LENGTH = 120
 MAX_PATH_LENGTH = 500
 # Store writes (SPEC-002): a 10 MiB document is about 13.4 MiB as base64 JSON.
+STORE_DOCUMENT = "/api/v1/store/document"
 MAX_REQUEST_BYTES = 16 * 1024 * 1024
 # /ready waits this long at most for the store probe (Docker HEALTHCHECK times out at 3 s).
 STORE_PROBE_WAIT = 1.0
@@ -1011,7 +1012,9 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
             refusal = self.api.preauthorize(
                 self.command, self.path, dict(self.headers.items())
             )
-            if refusal is None:
+            # Only a store PUT has a body; every other route is answered without reading one.
+            target = urlsplit(self.path).path.rstrip("/")
+            if refusal is None and self.command == "PUT" and target == STORE_DOCUMENT:
                 body, refusal = self._read_body()
             if refusal is not None:
                 self.close_connection = True

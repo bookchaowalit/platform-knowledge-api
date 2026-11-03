@@ -357,6 +357,18 @@ def test_an_unauthorized_write_is_refused_before_the_body_is_read(
         response = connection.getresponse()
         assert response.status == 401
         response.read()
+        # Routes without a body are answered without reading one either.
+        for method, target in (("PUT", "/health"), ("POST", "/not-a-route")):
+            other = HTTPConnection(str(host), int(port), timeout=5)
+            try:
+                other.putrequest(method, target)
+                other.putheader("Content-Length", str(MAX_REQUEST_BYTES))
+                other.endheaders()
+                answer = other.getresponse()
+                assert answer.status in {404, 405}
+                answer.read()
+            finally:
+                other.close()
     finally:
         connection.close()
         server.shutdown()
@@ -401,3 +413,23 @@ def test_each_extra_key_is_trusted_and_a_garbled_extra_key_disables_auth(
         "not a key",
     )
     assert not garbled.ready
+
+
+def test_an_rsa_public_key_block_still_works_as_an_extra_key(catalog: Path) -> None:
+    solo, extra = Keys(), Keys()
+    pkcs1 = (
+        extra.key.public_key()
+        .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.PKCS1)
+        .decode()
+    )
+    assert pkcs1.startswith("-----BEGIN RSA PUBLIC KEY-----")
+    policy = AuthPolicy(
+        "https://solo.example",
+        "knowledge-api",
+        solo.public,
+        frozenset({"fixture-owner"}),
+        "knowledge:read",
+        pkcs1,
+    )
+    assert policy.ready
+    policy.authenticate(extra.headers("knowledge:read"))
