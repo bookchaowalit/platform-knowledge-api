@@ -433,3 +433,19 @@ def test_an_rsa_public_key_block_still_works_as_an_extra_key(catalog: Path) -> N
     )
     assert policy.ready
     policy.authenticate(extra.headers("knowledge:read"))
+
+
+def test_a_blank_if_version_is_refused_not_ignored(catalog: Path) -> None:
+    api = dev_api(catalog, MemoryStore(spaces=(SPACE,)))
+    assert api.handle("PUT", DOC, body=body({"content": "x"})).status == 201
+    for blank in ("if_version=", "if_version"):
+        response = api.handle("DELETE", f"{DOC}&{blank}")
+        assert (response.status, response.payload["error"]["code"]) == (
+            400,
+            "invalid_if_version",
+        )
+    assert api.handle("GET", DOC).status == 200
+    assert (
+        api.handle("GET", f"/api/v1/store/documents?space={SPACE}&prefix=").status
+        == 200
+    )

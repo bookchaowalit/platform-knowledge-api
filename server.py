@@ -943,7 +943,11 @@ class KnowledgeApi:
                     },
                 )
             if path.startswith("/api/v1/store/"):
-                return self._store_route(method, path, query, request_headers, body)
+                # Keep blank values: `if_version=` must be refused, not read as absent.
+                store_query = parse_qs(parsed.query, keep_blank_values=True)
+                return self._store_route(
+                    method, path, store_query, request_headers, body
+                )
             if path.startswith("/api/v1/knowledge"):
                 self._check_read_auth(request_headers)
                 if method != "GET":

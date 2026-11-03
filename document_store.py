@@ -20,6 +20,7 @@ from threading import RLock
 from typing import Any, Protocol
 
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
+MAX_SEGMENT_BYTES = 255
 MAX_PATH_LENGTH = 500
 MAX_LIST_LIMIT = 1000
 VISIBILITIES = frozenset({"private", "public"})
@@ -183,6 +184,8 @@ def check_path(path: str) -> str:
         # Secret-looking names are refused at every level (a .env/ or keys.pem/ folder too).
         if (
             segment in {"", ".", ".."}
+            # A pulled snapshot writes each segment as a file name: 255 bytes is the limit.
+            or len(segment.encode("utf-8")) > MAX_SEGMENT_BYTES
             or segment.lower() in FORBIDDEN_SEGMENTS
             or FORBIDDEN_NAME_RE.match(segment)
         ):
