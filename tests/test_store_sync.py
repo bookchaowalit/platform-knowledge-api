@@ -87,8 +87,20 @@ def test_collect_skips_paths_the_store_would_refuse(tmp_path: Path) -> None:
     outside.mkdir()
     (outside / "private.md").write_text("not ours", encoding="utf-8")
     (root / "linked").symlink_to(outside, target_is_directory=True)
+    # A folder inside the root that links to a refused one.
+    (root / ".aws").mkdir()
+    (root / ".aws" / "config").write_text("[default]", encoding="utf-8")
+    (root / "notes").mkdir()
+    (root / "notes" / "config").symlink_to(root / ".aws", target_is_directory=True)
     files = store_sync.collect(
-        root, paths=[".env", "ok.md", "missing.md", "linked/private.md"]
+        root,
+        paths=[
+            ".env",
+            "ok.md",
+            "missing.md",
+            "linked/private.md",
+            "notes/config/config",
+        ],
     )
     assert [f.path for f in files] == ["ok.md"]
 

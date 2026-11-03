@@ -193,12 +193,10 @@ def collect(root: Path, *, paths: Iterable[str]) -> list[LocalFile]:
         except StoreError:
             continue
         source = root / path
-        # Refuse symlinks anywhere on the way, not just the last component.
-        if (
-            not source.is_file()
-            or source.is_symlink()
-            or not source.resolve().is_relative_to(root.resolve())
-        ):
+        # Refuse symlinks anywhere on the way, not just the last component: a symlinked
+        # folder (notes/config -> .aws) would otherwise upload a refused path under a
+        # harmless name. Without any symlink the resolved path is exactly root/path.
+        if not source.is_file() or source.resolve() != root.resolve() / path:
             continue
         files[path] = LocalFile(
             path, source, hashlib.sha256(source.read_bytes()).hexdigest()
