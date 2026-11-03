@@ -78,9 +78,17 @@ def test_push_skips_unchanged_files_and_verify_proves_parity(
 
 
 def test_collect_skips_paths_the_store_would_refuse(tmp_path: Path) -> None:
-    (tmp_path / ".env").write_text("SECRET=x", encoding="utf-8")
-    (tmp_path / "ok.md").write_text("ok", encoding="utf-8")
-    files = store_sync.collect(tmp_path, paths=[".env", "ok.md", "missing.md"])
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / ".env").write_text("SECRET=x", encoding="utf-8")
+    (root / "ok.md").write_text("ok", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.md").write_text("not ours", encoding="utf-8")
+    (root / "linked").symlink_to(outside, target_is_directory=True)
+    files = store_sync.collect(
+        root, paths=[".env", "ok.md", "missing.md", "linked/private.md"]
+    )
     assert [f.path for f in files] == ["ok.md"]
 
 
@@ -96,6 +104,12 @@ def test_pull_writes_each_document_inside_the_target(
     assert count == 3
     assert (out / "diary/2026/11/03/a.md").read_text(encoding="utf-8") == "บันทึก"
     assert (out / "assets/x.png").read_bytes() == b"\x89PNG\x00\xff"
+    # Private content: owner-only directories and files.
+    assert (
+        out.stat().st_mode & 0o777,
+        (out / "diary/2026").stat().st_mode & 0o777,
+    ) == (0o700, 0o700)
+    assert (out / "notes/c.md").stat().st_mode & 0o777 == 0o600
     with pytest.raises(store_sync.SyncError):
         store_sync.safe_target(out, "../escape.md")
     # A second pull into the same directory is refused, so stale files cannot linger.

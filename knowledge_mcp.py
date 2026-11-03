@@ -491,8 +491,11 @@ def mint(environ: Any = None, now: float | None = None, *, scope: str = SCOPE) -
     if scope not in {SCOPE, WRITE_SCOPE}:
         raise ConfigError("unknown knowledge scope")
     environ = os.environ if environ is None else environ
-    if environ.get("EMPIRE_TOKEN"):
-        return clean_token(environ["EMPIRE_TOKEN"])
+    # A ready token stands in for one scope only: EMPIRE_TOKEN for reads, EMPIRE_WRITE_TOKEN
+    # for writes, so a read token is never sent where a write token was asked for.
+    override = "EMPIRE_WRITE_TOKEN" if scope == WRITE_SCOPE else "EMPIRE_TOKEN"
+    if environ.get(override):
+        return clean_token(environ[override])
     origin = issuer(environ)
     key_path = Path(
         environ.get("SOLO_WEB_SERVICE_KEY_FILE") or HOME_CONFIG / "service-private.pem"

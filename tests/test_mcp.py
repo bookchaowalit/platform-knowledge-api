@@ -371,6 +371,12 @@ def test_a_bad_key_does_not_leak_its_text(env, tmp_path):
 
 def test_ready_token_overrides_minting_and_is_cleaned():
     assert mod.mint({"EMPIRE_TOKEN": " ready.jwt.token \n"}) == "ready.jwt.token"
+    # The read override never stands in for a write token, and vice versa.
+    env = {"EMPIRE_TOKEN": "read.jwt", "EMPIRE_WRITE_TOKEN": "write.jwt"}
+    assert mod.mint(env, scope=mod.WRITE_SCOPE) == "write.jwt"
+    assert mod.mint(env) == "read.jwt"
+    with pytest.raises(mod.ConfigError):
+        mod.mint({"EMPIRE_TOKEN": "read.jwt"}, scope=mod.WRITE_SCOPE)
     with pytest.raises(mod.ConfigError):
         mod.mint({"EMPIRE_TOKEN": "has space"})
 

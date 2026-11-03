@@ -149,6 +149,8 @@ def test_an_identical_write_does_not_add_a_version(store: Store) -> None:
         ".ssh/id_rsa",
         "keys/server.pem",
         "keys/server.key",
+        ".env/notes.md",
+        "certs.pem/readme.md",
     ],
 )
 def test_unsafe_paths_and_unknown_spaces_are_refused(store: Store, path: str) -> None:

@@ -21,6 +21,7 @@ import argparse
 import base64
 import contextlib
 import hashlib
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
@@ -185,7 +186,12 @@ def collect(root: Path, *, paths: Iterable[str]) -> list[LocalFile]:
         except StoreError:
             continue
         source = root / path
-        if not source.is_file() or source.is_symlink():
+        # Refuse symlinks anywhere on the way, not just the last component.
+        if (
+            not source.is_file()
+            or source.is_symlink()
+            or not source.resolve().is_relative_to(root.resolve())
+        ):
             continue
         files[path] = LocalFile(
             path, source, hashlib.sha256(source.read_bytes()).hexdigest()
@@ -247,12 +253,17 @@ def pull(client: StoreClient, space: str, out: Path) -> int:
     store can linger from an earlier pull."""
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise SyncError("pull needs a new or empty --out directory")
-    out.mkdir(parents=True, exist_ok=True)
+    # The snapshot holds private documents: owner-only directories and files.
+    out.mkdir(mode=0o700, parents=True, exist_ok=True)
+    out.chmod(0o700)
     remote = client.list_all(space)
     for path in sorted(remote):
         target = safe_target(out, path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(client.get(space, path))
+        for parent in reversed(target.relative_to(out.resolve()).parents[:-1]):
+            (out.resolve() / parent).mkdir(mode=0o700, exist_ok=True)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(client.get(space, path))
     return len(remote)
 
 

@@ -174,10 +174,13 @@ def check_path(path: str) -> str:
         raise invalid
     segments = path.split("/")
     for segment in segments:
-        if segment in {"", ".", ".."} or segment.lower() in FORBIDDEN_SEGMENTS:
+        # Secret-looking names are refused at every level (a .env/ or keys.pem/ folder too).
+        if (
+            segment in {"", ".", ".."}
+            or segment.lower() in FORBIDDEN_SEGMENTS
+            or FORBIDDEN_NAME_RE.match(segment)
+        ):
             raise invalid
-    if FORBIDDEN_NAME_RE.match(segments[-1]):
-        raise invalid
     return path
 
 
