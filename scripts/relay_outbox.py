@@ -54,10 +54,12 @@ def main(argv: list[str] | None = None) -> int:
             result = relay_once(conn, args.schema, publisher, args.batch_size)
             sent += result.sent
             failed += result.failed
-            # Keep going while batches make progress: a short batch can still unblock later
-            # rows of a key whose failed head just succeeded. Failed rows wait for backoff,
-            # so a batch with no successes means nothing more is eligible now.
-            if result.skipped or result.sent == 0 or time.monotonic() >= deadline:
+            # Keep going while batches make progress: every processed row changes state
+            # (sent, or failed into backoff), so the next batch selects other rows. A short
+            # batch can also unblock later rows of a key whose failed head just succeeded.
+            # A batch that processed nothing means nothing more is eligible now.
+            processed = result.sent + result.failed
+            if result.skipped or processed == 0 or time.monotonic() >= deadline:
                 break
         backlog_age = oldest_unsent_seconds(conn, args.schema)
     finally:

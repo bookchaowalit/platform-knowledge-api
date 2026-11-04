@@ -350,3 +350,26 @@ def test_the_script_keeps_draining_after_a_failed_head_succeeds(
     assert relay_outbox.main(["--schema", pg.schema]) == 0
     assert json.loads(capsys.readouterr().out)["sent"] == 2
     assert [value["data"]["version"] for _, _, value in recorder.sent] == [1, 2]
+
+
+def test_the_script_keeps_draining_past_a_batch_of_only_failures(
+    pg: PostgresStore,
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    for name in ("a.md", "b.md", "c.md"):
+        pg.put(SPACE, name, b"1")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import relay_outbox
+
+    failing = {f"{SPACE}:{outbox.path_key(SPACE, n, KEY)}" for n in ("a.md", "b.md")}
+    recorder = Recorder(fail_keys=failing)
+    recorder.close = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setattr(relay_outbox, "KafkaPublisher", lambda config: recorder)
+    monkeypatch.setattr(relay_outbox, "kafka_config_from_env", dict)
+    monkeypatch.setenv("KNOWLEDGE_RELAY_DATABASE_URL", database_url)
+    # Batch 1 = a, b (both fail); batch 2 must still send c.
+    assert relay_outbox.main(["--schema", pg.schema, "--batch-size", "2"]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert (out["sent"], out["failed"]) == (1, 2)
