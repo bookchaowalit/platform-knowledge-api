@@ -258,3 +258,24 @@ def test_push_with_prune_mirrors_deletes_and_renames(
     store = api.store
     assert store is not None
     assert [v.deleted for v in store.history(SPACE, "gone.md")] == [False, True]
+
+
+def test_push_refuses_a_path_swapped_for_a_symlink_after_collect(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    source = tmp_path / "kb"
+    (source / "notes").mkdir(parents=True)
+    (source / "notes" / "a.md").write_text("# A\n", encoding="utf-8")
+    (source / "notes" / "b.md").write_text("# B\n", encoding="utf-8")
+    secret = tmp_path / "secret.txt"
+    secret.write_text("TOKEN=hunter2\n", encoding="utf-8")
+    files = store_sync.collect(source, paths=["notes/a.md", "notes/b.md"])
+
+    (source / "notes" / "a.md").unlink()
+    (source / "notes" / "a.md").symlink_to(secret)
+    (source / "notes" / "b.md").write_text("# B changed\n", encoding="utf-8")
+    client = client_for(api)
+    report = store_sync.push(client, SPACE, files)
+
+    assert (report.written, report.failed) == (0, ["notes/a.md", "notes/b.md"])
+    assert client.list_all(SPACE) == {}

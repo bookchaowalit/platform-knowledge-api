@@ -198,6 +198,7 @@ def collect(root: Path, *, paths: Iterable[str]) -> list[LocalFile]:
         # harmless name. Without any symlink the resolved path is exactly root/path.
         if not source.is_file() or source.resolve() != root.resolve() / path:
             continue
+        source = root.resolve() / path  # symlink-free, so upload can re-check it is still exact
         files[path] = LocalFile(
             path, source, hashlib.sha256(source.read_bytes()).hexdigest()
         )
@@ -226,11 +227,17 @@ def push(
         if meta and meta["sha256"] == local.sha256:
             report.unchanged += 1
             continue
+        # Re-check at upload time: a path swapped for a symlink after collect() must not leak
+        # another file's bytes, so the read must stay confined and match the collected hash.
+        body = local.source.read_bytes() if local.source.resolve() == local.source else None
+        if body is None or hashlib.sha256(body).hexdigest() != local.sha256:
+            report.failed.append(local.path)
+            continue
         try:
             client.put(
                 space,
                 local.path,
-                local.source.read_bytes(),
+                body,
                 if_version=int(meta["version"]) if meta else 0,
             )
             report.written += 1
