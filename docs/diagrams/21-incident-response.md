@@ -15,7 +15,8 @@ flowchart TD
   TRI -->|"no response"| F4["Railway deployment state, e.g. REMOVED or NEEDS_APPROVAL; railway up"]
   F1 --> V["Verify: /ready 200 and live revision equals staged"]
   F2 --> V
-  F3 --> V
+  F3 --> V3["Verify store: authenticated knowledge.store.get or list returns 200; after restore, spot-check restored documents and versions"]
+  V3 --> V
   F4 --> V
   V --> PM["Postmortem: record in ops memory and spec risk table"]
   F3 -->|"data loss"| RS["Restore from R2 db-backup per platform-db-backup runbook"]
