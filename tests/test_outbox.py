@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -237,3 +239,47 @@ def test_kafka_publisher_waits_for_the_ack(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(RuntimeError, match="TOPIC_AUTHORIZATION_FAILED"):
         publisher.publish("platform.events.v1", "k", {"id": "y"})
     publisher.close()
+
+
+def test_least_privilege_roles_can_write_and_relay(database_url: str) -> None:
+    """R6 with the migration's own grants: the runtime role writes, the relay role relays."""
+    import psycopg
+    from psycopg.conninfo import conninfo_to_dict, make_conninfo
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from store_migrate import apply_grants
+
+    suffix = uuid.uuid4().hex[:8]
+    runtime, relay_role = f"rt_{suffix}", f"rl_{suffix}"
+    owner = PostgresStore(database_url, spaces=(SPACE,), schema=f"t_{suffix}")
+    owner.migrate()
+    try:
+        with psycopg.connect(database_url, autocommit=True) as conn:
+            for role in (runtime, relay_role):
+                conn.execute(f"CREATE ROLE {role} LOGIN PASSWORD 'pw'")
+            apply_grants(conn, owner.schema, runtime, relay_role)
+        params = conninfo_to_dict(database_url)
+        as_runtime = make_conninfo("", **{**params, "user": runtime, "password": "pw"})
+        as_relay = make_conninfo("", **{**params, "user": relay_role, "password": "pw"})
+        writer = PostgresStore(
+            as_runtime, spaces=(SPACE,), schema=owner.schema, event_key=KEY
+        )
+        try:
+            writer.put(SPACE, "a.md", b"1")
+            writer.delete(SPACE, "a.md")
+        finally:
+            writer.close()
+        with psycopg.connect(as_relay, autocommit=True) as conn:
+            result = outbox.relay_once(conn, owner.schema, Recorder())
+        assert (result.sent, result.failed) == (2, 0)
+        with (
+            psycopg.connect(as_runtime) as conn,
+            pytest.raises(psycopg.errors.InsufficientPrivilege),
+        ):
+            conn.execute(f"SELECT envelope FROM {owner.schema}.store_outbox")
+    finally:
+        owner.drop_schema()
+        owner.close()
+        with psycopg.connect(database_url, autocommit=True) as conn:
+            for role in (runtime, relay_role):
+                conn.execute(f"DROP ROLE IF EXISTS {role}")

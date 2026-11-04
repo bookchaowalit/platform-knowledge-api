@@ -33,7 +33,7 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs, `docs/architecture/decision
 | R3 | Events carry metadata only, never content. Public documents: space, path, version, sha256, size, media type. Private documents: space, version, media type, visibility and an HMAC-SHA256 path key (`KNOWLEDGE_EVENT_KEY`, held only by the service); no plain path hash, content hash or size, which could confirm a guessed path or short text |
 | R4 | The relay publishes in insertion order per key, marks a row sent only after the broker ack, backs a failed row off (1 … 64 min) and holds later rows of that key |
 | R5 | One relay at a time (transaction-scoped advisory lock in an explicit transaction) |
-| R6 | Least privilege: the runtime role may only INSERT into `store_outbox`; the relay role may only SELECT and UPDATE it; Kafka user `knowledge-producer` may only write `platform.events.v1` |
+| R6 | Least privilege: the runtime role may only INSERT into `store_outbox` (plus SELECT of `id`, which `ON CONFLICT (id)` needs); the relay role may only SELECT and UPDATE it; Kafka user `knowledge-producer` may only write `platform.events.v1` |
 
 ## 3. Design
 
@@ -50,5 +50,6 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs, `docs/architecture/decision
 ## 4. Test plan
 
 `tests/test_outbox.py` against Postgres (embedded pgserver in CI, or
-`KNOWLEDGE_STORE_TEST_DATABASE_URL`): R1–R5 and the publisher/config units. R6 is checked on the
-production database after migration (grants listed by `has_table_privilege`).
+`KNOWLEDGE_STORE_TEST_DATABASE_URL`): R1–R5, the publisher/config units, and R6 with the
+migration's own grants on throwaway roles (a test as superuser missed the `ON CONFLICT` grant
+on 2026-11-04 and production writes failed for about 15 minutes).

@@ -5,7 +5,8 @@
         [--relay-role knowledge_relay]
 
 Idempotent. The runtime role (the one in KNOWLEDGE_STORE_DATABASE_URL) gets only SELECT,
-INSERT, UPDATE and DELETE on the two store tables and INSERT on store_outbox (SPEC-003),
+INSERT, UPDATE and DELETE on the two store tables and INSERT (plus SELECT of id, for
+ON CONFLICT) on store_outbox (SPEC-003),
 never DDL. The relay role gets only SELECT and UPDATE on store_outbox. Nothing secret is printed.
 """
 
@@ -16,12 +17,31 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from document_store import PostgresStore
 
 ROLE_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
+
+
+def apply_grants(
+    conn: Any, schema: str, runtime_role: str, relay_role: str | None
+) -> None:
+    """Data grants only. The runtime role inserts outbox rows; `ON CONFLICT (id)` also needs
+    SELECT on that one column, so it gets SELECT (id) and nothing else of store_outbox."""
+    conn.execute(f"GRANT USAGE ON SCHEMA {schema} TO {runtime_role}")
+    conn.execute(
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON"
+        f" {schema}.store_documents, {schema}.store_versions TO {runtime_role}"
+    )
+    conn.execute(
+        f"GRANT INSERT, SELECT (id) ON {schema}.store_outbox TO {runtime_role}"
+    )
+    if relay_role:
+        conn.execute(f"GRANT USAGE ON SCHEMA {schema} TO {relay_role}")
+        conn.execute(f"GRANT SELECT, UPDATE ON {schema}.store_outbox TO {relay_role}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -39,20 +59,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         store.migrate()
         with store.pool.connection() as conn:
-            role = args.runtime_role
-            conn.execute(f"GRANT USAGE ON SCHEMA {store.schema} TO {role}")
-            conn.execute(
-                "GRANT SELECT, INSERT, UPDATE, DELETE ON"
-                f" {store.schema}.store_documents, {store.schema}.store_versions TO {role}"
-            )
-            conn.execute(f"GRANT INSERT ON {store.schema}.store_outbox TO {role}")
-            if args.relay_role:
-                conn.execute(
-                    f"GRANT USAGE ON SCHEMA {store.schema} TO {args.relay_role}"
-                )
-                conn.execute(
-                    f"GRANT SELECT, UPDATE ON {store.schema}.store_outbox TO {args.relay_role}"
-                )
+            apply_grants(conn, store.schema, args.runtime_role, args.relay_role)
     finally:
         store.close()
     print("document store schema is current; runtime grants applied")
