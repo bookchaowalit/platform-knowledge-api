@@ -279,3 +279,34 @@ def test_push_refuses_a_path_swapped_for_a_symlink_after_collect(
 
     assert (report.written, report.failed) == (0, ["notes/a.md", "notes/b.md"])
     assert client.list_all(SPACE) == {}
+
+
+def test_push_keeps_going_when_a_file_vanishes_after_collect(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    source = tmp_path / "kb"
+    source.mkdir()
+    (source / "a.md").write_text("# A\n", encoding="utf-8")
+    (source / "b.md").write_text("# B\n", encoding="utf-8")
+    files = store_sync.collect(source, paths=["a.md", "b.md"])
+    (source / "a.md").unlink()
+    report = store_sync.push(client_for(api), SPACE, files)
+    assert (report.written, report.failed) == (1, ["a.md"])
+
+
+def test_pull_refuses_paths_that_alias_one_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    out = tmp_path / "out"
+
+    class Aliasing:
+        """On a case-insensitive filesystem A.md and a.md are one file; here writing the first
+        document also creates the second path, which is what that aliasing looks like."""
+
+        def get(self, space: str, path: str, version: int | None = None) -> bytes:
+            (out / "b.md").write_bytes(b"first")
+            return path.encode()
+
+    listing = {"a.md": {"version": 1, "sha256": "x"}, "b.md": {"version": 1, "sha256": "y"}}
+    monkeypatch.setattr(store_sync, "consistent_listing", lambda client, space: listing)
+    with pytest.raises(store_sync.SyncError, match="collides"):
+        store_sync.pull(Aliasing(), SPACE, out)  # type: ignore[arg-type]
+    assert (out / "b.md").read_bytes() == b"first"

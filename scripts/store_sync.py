@@ -229,7 +229,10 @@ def push(
             continue
         # Re-check at upload time: a path swapped for a symlink after collect() must not leak
         # another file's bytes, so the read must stay confined and match the collected hash.
-        body = local.source.read_bytes() if local.source.resolve() == local.source else None
+        try:
+            body = local.source.read_bytes() if local.source.resolve() == local.source else None
+        except OSError:  # removed or unreadable since collect(): this file fails, the rest go on
+            body = None
         if body is None or hashlib.sha256(body).hexdigest() != local.sha256:
             report.failed.append(local.path)
             continue
@@ -306,7 +309,12 @@ def pull(client: StoreClient, space: str, out: Path) -> int:
         target = safe_target(out, path)
         for parent in reversed(target.relative_to(out.resolve()).parents[:-1]):
             (out.resolve() / parent).mkdir(mode=0o700, exist_ok=True)
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        # O_EXCL: the folder is new, so an existing file means two store paths alias one file
+        # (A.md and a.md on a case-insensitive filesystem); fail instead of overwriting.
+        try:
+            fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            raise SyncError(f"{path} collides with another document on this filesystem") from None
         with os.fdopen(fd, "wb") as handle:
             # The version from the listing: the snapshot is one consistent point in time
             # even if documents change while it is being pulled.
