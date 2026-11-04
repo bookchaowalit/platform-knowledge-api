@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -32,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--schema", default="public")
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--max-batches", type=int, default=20)
+    parser.add_argument("--run-seconds", type=float, default=300.0)
     args = parser.parse_args(argv)
     url = os.environ.get("KNOWLEDGE_RELAY_DATABASE_URL", "").strip()
     if not url:
@@ -45,12 +47,17 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"status": "error", "error": type(exc).__name__}))
         return 2
     sent = failed = 0
+    # Whole run well inside the workflow's 10-minute timeout (each batch ends within ~75 s).
+    deadline = time.monotonic() + args.run_seconds
     try:
         for _ in range(args.max_batches):
             result = relay_once(conn, args.schema, publisher, args.batch_size)
             sent += result.sent
             failed += result.failed
-            if result.skipped or result.failed or result.sent < args.batch_size:
+            # Keep going while batches make progress: a short batch can still unblock later
+            # rows of a key whose failed head just succeeded. Failed rows wait for backoff,
+            # so a batch with no successes means nothing more is eligible now.
+            if result.skipped or result.sent == 0 or time.monotonic() >= deadline:
                 break
         backlog_age = oldest_unsent_seconds(conn, args.schema)
     finally:

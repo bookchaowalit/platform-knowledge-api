@@ -283,3 +283,70 @@ def test_least_privilege_roles_can_write_and_relay(database_url: str) -> None:
         with psycopg.connect(database_url, autocommit=True) as conn:
             for role in (runtime, relay_role):
                 conn.execute(f"DROP ROLE IF EXISTS {role}")
+
+
+def test_a_batch_stops_taking_rows_when_its_time_budget_is_spent(
+    pg: PostgresStore,
+) -> None:
+    pg.put(SPACE, "a.md", b"1")
+    with pg.pool.connection() as conn:
+        conn.autocommit = True
+        result = outbox.relay_once(conn, pg.schema, Recorder(), time_budget=0)
+    assert (result.sent, result.failed) == (0, 0)
+    assert (
+        rows(pg)[0]["sent_at"] is None
+    )  # left for the next batch, nothing rolled back
+
+
+def test_writers_of_one_message_key_are_serialised_until_commit(
+    pg: PostgresStore,
+) -> None:
+    with pg.pool.connection() as conn, conn.transaction():
+        outbox.enqueue(
+            conn,
+            pg.schema,
+            SPACE,
+            outbox.document_event(
+                space=SPACE,
+                path="x.md",
+                version=1,
+                sha256="s",
+                size=1,
+                media_type="text/markdown",
+                visibility="private",
+                deleted=False,
+            )[1],
+        )
+        held = conn.execute(
+            "SELECT count(*) FROM pg_locks WHERE locktype = 'advisory' AND pid = pg_backend_pid()"
+        ).fetchone()
+    assert held is not None
+    assert held[0] == 1
+
+
+def test_the_script_keeps_draining_after_a_failed_head_succeeds(
+    pg: PostgresStore,
+    monkeypatch: pytest.MonkeyPatch,
+    database_url: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    pg.put(SPACE, "a.md", b"1")
+    pg.put(SPACE, "a.md", b"2")
+    with pg.pool.connection() as conn:
+        # The head failed once and its backoff has passed: only it is eligible in batch 1.
+        conn.execute(
+            f"UPDATE {pg.schema}.store_outbox SET attempts = 1,"
+            " next_attempt_at = now() - interval '1 minute'"
+            f" WHERE seq = (SELECT min(seq) FROM {pg.schema}.store_outbox)"
+        )
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import relay_outbox
+
+    recorder = Recorder()
+    recorder.close = lambda: None  # type: ignore[attr-defined]
+    monkeypatch.setattr(relay_outbox, "KafkaPublisher", lambda config: recorder)
+    monkeypatch.setattr(relay_outbox, "kafka_config_from_env", dict)
+    monkeypatch.setenv("KNOWLEDGE_RELAY_DATABASE_URL", database_url)
+    assert relay_outbox.main(["--schema", pg.schema]) == 0
+    assert json.loads(capsys.readouterr().out)["sent"] == 2
+    assert [value["data"]["version"] for _, _, value in recorder.sent] == [1, 2]

@@ -25,6 +25,8 @@ from typing import Any, Protocol
 TOPIC = "platform.events.v1"
 PRODUCER = "knowledge-api"
 PUBLISH_TIMEOUT_SECONDS = 15.0
+# One batch commits within about this long (plus one publish timeout).
+BATCH_TIME_BUDGET_SECONDS = 60.0
 
 OUTBOX_SQL = """
 CREATE TABLE IF NOT EXISTS {schema}.store_outbox (
@@ -108,7 +110,17 @@ def document_event(
 
 
 def enqueue(conn: Any, schema: str, message_key: str, envelope: dict[str, Any]) -> None:
-    """Insert in the caller's transaction; a replayed write of the same version is a no-op."""
+    """Insert in the caller's transaction; a replayed write of the same version is a no-op.
+
+    Writers of one message key are serialised until commit, so seq order equals commit order
+    per key (the relay must never see N+1 committed before N). Path locks already do this for
+    keyed paths; the shared fallback key (private events without KNOWLEDGE_EVENT_KEY) needs it.
+    Taken after the path locks, always in that order, so it cannot deadlock.
+    """
+    conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"{schema}:outbox-key:{message_key}",),
+    )
     conn.execute(
         f"INSERT INTO {schema}.store_outbox (id, topic, message_key, envelope)"
         " VALUES (%s, %s, %s, %s::jsonb) ON CONFLICT (id) DO NOTHING",
@@ -159,9 +171,17 @@ def _statements(schema: str) -> dict[str, str]:
 
 
 def relay_once(
-    conn: Any, schema: str, publisher: Publisher, batch_size: int = 100
+    conn: Any,
+    schema: str,
+    publisher: Publisher,
+    batch_size: int = 100,
+    time_budget: float = BATCH_TIME_BUDGET_SECONDS,
 ) -> RelayResult:
-    """Publish one batch in one explicit transaction (holds the relay lock throughout)."""
+    """Publish one batch in one explicit transaction (holds the relay lock throughout).
+
+    Stops taking new rows once `time_budget` seconds have passed, so the transaction commits
+    its sent markers and backoffs long before the job is killed (a kill rolls them back).
+    """
     if not _SCHEMA_RE.fullmatch(schema):
         raise ValueError("schema must be a plain lower-case identifier")
     sql = _statements(schema)
@@ -173,7 +193,10 @@ def relay_once(
             return RelayResult(0, 0, skipped=True)
         rows = conn.execute(sql["select"], (batch_size,)).fetchall()
         blocked: set[tuple[str, str]] = set()
+        deadline = time.monotonic() + time_budget
         for row_id, topic, key, envelope in rows:
+            if time.monotonic() >= deadline:
+                break  # the rest stay unsent for the next batch
             if (topic, key) in blocked:
                 continue  # an earlier event for this key failed in this run; keep the order
             value = json.loads(envelope) if isinstance(envelope, str) else envelope
