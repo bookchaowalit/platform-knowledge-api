@@ -59,6 +59,9 @@ services). The catalog routes above are unchanged; the store has its own routes:
 - Storage is Postgres (`KNOWLEDGE_STORE_DATABASE_URL`, runtime role with data grants only;
   `KNOWLEDGE_STORE_SPACES`, default `knowledge-base`). Without a URL the routes answer 503
   `store_unavailable` and `/ready` reports `store: disabled`; the store never gates readiness.
+- Events (SPEC-003): each write that adds a version also records a `knowledge.document.*` event in
+  `store_outbox` (same transaction); `.github/workflows/relay-outbox.yml` publishes them hourly to
+  Kafka `platform.events.v1`. Private events carry only an HMAC path key (`KNOWLEDGE_EVENT_KEY`).
 - Create or update the tables with the owner role:
   `KNOWLEDGE_STORE_OWNER_DATABASE_URL=... uv run python scripts/store_migrate.py --runtime-role <role>`.
 - Move a directory in, prove parity, or take a snapshot out (tokens minted like the MCP's):

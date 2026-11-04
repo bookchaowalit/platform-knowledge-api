@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -14,6 +15,7 @@ import outbox
 from document_store import PostgresStore, StoreError
 
 SPACE = "knowledge-base"
+KEY = b"test-event-key"
 
 
 @pytest.fixture
@@ -22,6 +24,7 @@ def pg(database_url: str) -> Iterator[PostgresStore]:
         database_url,
         spaces=(SPACE, "architecture-docs"),
         schema=f"t_{uuid.uuid4().hex[:12]}",
+        event_key=KEY,
     )
     store.migrate()
     try:
@@ -95,16 +98,41 @@ def test_each_changing_write_adds_one_event_and_identical_writes_add_none(
     assert all(r["topic"] == "platform.events.v1" for r in rows(pg))
 
 
-def test_private_paths_are_hashed_and_public_paths_are_sent(pg: PostgresStore) -> None:
+def test_private_events_carry_only_a_keyed_path_hash(pg: PostgresStore) -> None:
     pg.put(SPACE, "diary/2026-11-04.md", b"private text")
     pg.put("architecture-docs", "README.md", b"public", visibility="public")
     private, public = (r["envelope"] for r in rows(pg))
-    assert "path" not in private["data"]
-    assert private["data"]["path_sha256"] == outbox.path_digest(
-        SPACE, "diary/2026-11-04.md"
+    assert set(private["data"]) == {
+        "space",
+        "version",
+        "media_type",
+        "visibility",
+        "path_key",
+    }
+    assert private["data"]["path_key"] == outbox.path_key(
+        SPACE, "diary/2026-11-04.md", KEY
     )
-    assert "private text" not in json.dumps(private)
+    # Not the plain hash: a guessed path cannot be confirmed without the service's key.
+    plain = hashlib.sha256(f"{SPACE}\0diary/2026-11-04.md".encode()).hexdigest()
+    assert plain not in json.dumps(private)
+    assert "diary" not in json.dumps(private)
     assert public["data"]["path"] == "README.md"
+    assert public["data"]["size"] == 6
+
+
+def test_without_the_key_private_events_share_the_space_key() -> None:
+    key, envelope = outbox.document_event(
+        space=SPACE,
+        path="diary/x.md",
+        version=1,
+        sha256="s",
+        size=1,
+        media_type="text/markdown",
+        visibility="private",
+        deleted=False,
+    )
+    assert key == SPACE
+    assert "path_key" not in envelope["data"]
 
 
 def test_a_rejected_write_leaves_no_event(pg: PostgresStore) -> None:
@@ -133,12 +161,12 @@ def test_a_failed_key_backs_off_and_holds_its_later_events_but_not_other_keys(
     pg.put(SPACE, "a.md", b"1")
     pg.put(SPACE, "b.md", b"1")
     pg.put(SPACE, "a.md", b"2")
-    key_a = f"{SPACE}:{outbox.path_digest(SPACE, 'a.md')}"
+    key_a = f"{SPACE}:{outbox.path_key(SPACE, 'a.md', KEY)}"
     publisher = Recorder(fail_keys={key_a})
     result = relay(pg, publisher)
     assert (result.sent, result.failed) == (1, 1)
     assert [key for _, key, _ in publisher.sent] == [
-        f"{SPACE}:{outbox.path_digest(SPACE, 'b.md')}"
+        f"{SPACE}:{outbox.path_key(SPACE, 'b.md', KEY)}"
     ]
     first_a = rows(pg)[0]
     assert first_a["attempts"] == 1

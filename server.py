@@ -433,7 +433,8 @@ def store_from_env() -> Store | None:
         )
         if item.strip()
     )
-    return PostgresStore(url, spaces=spaces)
+    event_key = os.environ.get("KNOWLEDGE_EVENT_KEY", "").strip().encode() or None
+    return PostgresStore(url, spaces=spaces, event_key=event_key)
 
 
 class KnowledgeApi:

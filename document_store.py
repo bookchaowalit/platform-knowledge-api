@@ -466,8 +466,10 @@ class PostgresStore(_Spaces):
         schema: str = "public",
         min_size: int = 0,
         max_size: int = 4,
+        event_key: bytes | None = None,
     ) -> None:
         super().__init__(spaces)
+        self.event_key = event_key  # SPEC-003: keys private path hashes in events
         if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", schema):
             raise ValueError("schema must be a plain lower-case identifier")
         from psycopg_pool import ConnectionPool
@@ -688,6 +690,7 @@ class PostgresStore(_Spaces):
                     media_type=resolved,
                     visibility=visibility,
                     deleted=False,
+                    event_key=self.event_key,
                 ),
             )
         assert row is not None
@@ -738,6 +741,7 @@ class PostgresStore(_Spaces):
                     media_type=old.media_type,
                     visibility=old.visibility,
                     deleted=True,
+                    event_key=self.event_key,
                 ),
             )
         assert row is not None

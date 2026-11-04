@@ -10,11 +10,13 @@ document's path is sent as a hash.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import re
 import tempfile
 import time
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -43,8 +45,15 @@ CREATE INDEX IF NOT EXISTS store_outbox_unsent ON {schema}.store_outbox (seq) WH
 _SCHEMA_RE = re.compile(r"[a-z_][a-z0-9_]{0,62}")
 
 
-def path_digest(space: str, path: str) -> str:
-    return hashlib.sha256(f"{space}\0{path}".encode()).hexdigest()
+def path_key(space: str, path: str, event_key: bytes | None) -> str | None:
+    """Keyed hash of a path (HMAC-SHA256 with KNOWLEDGE_EVENT_KEY, held only by this service).
+
+    A plain hash of a guessable path (``diary/<date>.md``) could be confirmed by anyone who
+    reads the events, so private paths are never hashed without the key.
+    """
+    if not event_key:
+        return None
+    return hmac.new(event_key, f"{space}\0{path}".encode(), hashlib.sha256).hexdigest()
 
 
 def document_event(
@@ -57,23 +66,34 @@ def document_event(
     media_type: str,
     visibility: str,
     deleted: bool,
+    event_key: bytes | None = None,
     now: datetime | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """The message key and envelope for one document version (metadata only)."""
+    """The message key and envelope for one document version (metadata only).
+
+    Public documents carry their path, content hash and size. Private documents carry only
+    space, keyed path hash, version, media type and visibility: no content hash or size,
+    which could confirm a guess at a short private text.
+    """
     verb = "deleted" if deleted else "updated"
-    key = path_digest(space, path)
-    event_id = f"knowledge.document.{verb}:{key[:32]}:v{version}"
+    # Random id: an event id derived from the path would leak it; the insert happens once,
+    # in the transaction that creates the version.
+    event_id = f"knowledge.document.{verb}:{uuid.uuid4()}"
+    keyed = path_key(space, path, event_key)
     data: dict[str, Any] = {
         "space": space,
-        "path_sha256": key,
         "version": version,
-        "sha256": sha256,
-        "size": size,
         "media_type": media_type,
         "visibility": visibility,
     }
+    if keyed:
+        data["path_key"] = keyed
     if visibility == "public":
-        data["path"] = path
+        data.update({"path": path, "sha256": sha256, "size": size})
+        message_key = f"{space}:{hashlib.sha256(path.encode()).hexdigest()}"
+    else:
+        # Without the key, private events of a space share one key (order kept per space).
+        message_key = f"{space}:{keyed}" if keyed else space
     envelope = {
         "id": event_id,
         "type": f"knowledge.document.{verb}",
@@ -84,7 +104,7 @@ def document_event(
         "causation_id": None,
         "data": data,
     }
-    return f"{space}:{key}", envelope
+    return message_key, envelope
 
 
 def enqueue(conn: Any, schema: str, message_key: str, envelope: dict[str, Any]) -> None:

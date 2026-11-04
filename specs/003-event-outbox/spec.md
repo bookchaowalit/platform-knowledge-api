@@ -30,7 +30,7 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs, `docs/architecture/decision
 |---|---|
 | R1 | A `put` that adds a version writes `knowledge.document.updated`; a `delete` writes `knowledge.document.deleted`; an identical write and a rejected write (version or path conflict) write nothing |
 | R2 | Event and version commit or roll back together (same transaction) |
-| R3 | Events carry metadata only (space, version, sha256, size, media type, visibility, path hash); the path itself only for `public` documents; never content |
+| R3 | Events carry metadata only, never content. Public documents: space, path, version, sha256, size, media type. Private documents: space, version, media type, visibility and an HMAC-SHA256 path key (`KNOWLEDGE_EVENT_KEY`, held only by the service); no plain path hash, content hash or size, which could confirm a guessed path or short text |
 | R4 | The relay publishes in insertion order per key, marks a row sent only after the broker ack, backs a failed row off (1 … 64 min) and holds later rows of that key |
 | R5 | One relay at a time (transaction-scoped advisory lock in an explicit transaction) |
 | R6 | Least privilege: the runtime role may only INSERT into `store_outbox`; the relay role may only SELECT and UPDATE it; Kafka user `knowledge-producer` may only write `platform.events.v1` |
@@ -40,8 +40,8 @@ Standard: ADR-0004 — TDD + SDD (architecture-docs, `docs/architecture/decision
 - `outbox.py`: envelope builder, `enqueue`, `relay_once`, `KafkaPublisher` (confluent-kafka),
   `kafka_config_from_env` (`KNOWLEDGE_KAFKA_*`). `document_store.PostgresStore` calls `enqueue`
   inside `put`/`delete`. The in-memory store has no outbox.
-- Event id `knowledge.document.<verb>:<path hash 32>:v<version>` (idempotent insert); message key
-  `<space>:<path hash>`.
+- Event id `knowledge.document.<verb>:<uuid4>` (nothing derived from the path); message key
+  `<space>:<path key>` (public: `<space>:<sha256(path)>`; private without the key: `<space>`).
 - `scripts/store_migrate.py --relay-role knowledge_relay` creates `store_outbox` and the grants.
 - `scripts/relay_outbox.py` drains the outbox; `.github/workflows/relay-outbox.yml` runs it hourly
   at :55 through the jobs queue (platform-jobs-worker job `knowledge-relay`), before the lake sink
