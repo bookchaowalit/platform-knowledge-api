@@ -120,7 +120,9 @@ def stage(source: Path, dest: Path) -> Staged:
     try:
         with os.fdopen(fd, "wb") as handle:
             handle.write(source.read_bytes())
-        os.chmod(tmp, 0o600)  # owner-only on disk; the Dockerfile grants read inside the image
+        os.chmod(
+            tmp, 0o600
+        )  # owner-only on disk; the Dockerfile grants read inside the image
         os.replace(tmp, dest)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)

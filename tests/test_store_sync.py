@@ -294,7 +294,9 @@ def test_push_keeps_going_when_a_file_vanishes_after_collect(
     assert (report.written, report.failed) == (1, ["a.md"])
 
 
-def test_pull_refuses_paths_that_alias_one_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pull_refuses_paths_that_alias_one_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     out = tmp_path / "out"
 
     class Aliasing:
@@ -305,7 +307,10 @@ def test_pull_refuses_paths_that_alias_one_file(tmp_path: Path, monkeypatch: pyt
             (out / "b.md").write_bytes(b"first")
             return path.encode()
 
-    listing = {"a.md": {"version": 1, "sha256": "x"}, "b.md": {"version": 1, "sha256": "y"}}
+    listing = {
+        "a.md": {"version": 1, "sha256": "x"},
+        "b.md": {"version": 1, "sha256": "y"},
+    }
     monkeypatch.setattr(store_sync, "consistent_listing", lambda client, space: listing)
     with pytest.raises(store_sync.SyncError, match="collides"):
         store_sync.pull(Aliasing(), SPACE, out)  # type: ignore[arg-type]

@@ -198,7 +198,9 @@ def collect(root: Path, *, paths: Iterable[str]) -> list[LocalFile]:
         # harmless name. Without any symlink the resolved path is exactly root/path.
         if not source.is_file() or source.resolve() != root.resolve() / path:
             continue
-        source = root.resolve() / path  # symlink-free, so upload can re-check it is still exact
+        source = (
+            root.resolve() / path
+        )  # symlink-free, so upload can re-check it is still exact
         files[path] = LocalFile(
             path, source, hashlib.sha256(source.read_bytes()).hexdigest()
         )
@@ -230,8 +232,14 @@ def push(
         # Re-check at upload time: a path swapped for a symlink after collect() must not leak
         # another file's bytes, so the read must stay confined and match the collected hash.
         try:
-            body = local.source.read_bytes() if local.source.resolve() == local.source else None
-        except OSError:  # removed or unreadable since collect(): this file fails, the rest go on
+            body = (
+                local.source.read_bytes()
+                if local.source.resolve() == local.source
+                else None
+            )
+        except (
+            OSError
+        ):  # removed or unreadable since collect(): this file fails, the rest go on
             body = None
         if body is None or hashlib.sha256(body).hexdigest() != local.sha256:
             report.failed.append(local.path)
@@ -314,7 +322,9 @@ def pull(client: StoreClient, space: str, out: Path) -> int:
         try:
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         except FileExistsError:
-            raise SyncError(f"{path} collides with another document on this filesystem") from None
+            raise SyncError(
+                f"{path} collides with another document on this filesystem"
+            ) from None
         with os.fdopen(fd, "wb") as handle:
             # The version from the listing: the snapshot is one consistent point in time
             # even if documents change while it is being pulled.
