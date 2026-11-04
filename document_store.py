@@ -19,6 +19,8 @@ from datetime import UTC, datetime
 from threading import RLock
 from typing import Any, Protocol
 
+from outbox import OUTBOX_SQL, document_event, enqueue
+
 MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 MAX_SEGMENT_BYTES = 255
 MAX_PATH_LENGTH = 500
@@ -490,6 +492,7 @@ class PostgresStore(_Spaces):
         with self.pool.connection() as conn:
             conn.execute(f"CREATE SCHEMA IF NOT EXISTS {self.schema}")
             conn.execute(SCHEMA_SQL.format(schema=self.schema))
+            conn.execute(OUTBOX_SQL.format(schema=self.schema))
 
     def drop_schema(self) -> None:
         with self.pool.connection() as conn:
@@ -672,6 +675,21 @@ class PostgresStore(_Spaces):
                     content,
                 ),
             )
+            # SPEC-003: the event commits or rolls back with the version it describes.
+            enqueue(
+                conn,
+                self.schema,
+                *document_event(
+                    space=space,
+                    path=path,
+                    version=version,
+                    sha256=sha,
+                    size=len(content),
+                    media_type=resolved,
+                    visibility=visibility,
+                    deleted=False,
+                ),
+            )
         assert row is not None
         return WriteResult(self._meta(row), changed=True)
 
@@ -708,5 +726,19 @@ class PostgresStore(_Spaces):
                     old.visibility,
                 ),
             ).fetchone()
+            enqueue(
+                conn,
+                self.schema,
+                *document_event(
+                    space=space,
+                    path=path,
+                    version=old.version + 1,
+                    sha256=old.sha256,
+                    size=0,
+                    media_type=old.media_type,
+                    visibility=old.visibility,
+                    deleted=True,
+                ),
+            )
         assert row is not None
         return self._meta(row, deleted=True)

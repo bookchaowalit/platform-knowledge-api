@@ -3,7 +3,6 @@ KNOWLEDGE_STORE_TEST_DATABASE_URL is set, a real Postgres (see the spec's test p
 
 from __future__ import annotations
 
-import os
 import sys
 import uuid
 from collections.abc import Iterator
@@ -20,28 +19,6 @@ from document_store import (
 )
 
 SPACE = "knowledge-base"
-
-
-@pytest.fixture(scope="session")
-def database_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """KNOWLEDGE_STORE_TEST_DATABASE_URL, else an embedded Postgres (pgserver), else skip."""
-    configured = os.environ.get("KNOWLEDGE_STORE_TEST_DATABASE_URL", "")
-    if configured:
-        yield configured
-        return
-    try:
-        import pgserver
-    except ImportError:
-        pytest.skip(
-            "no Postgres: set KNOWLEDGE_STORE_TEST_DATABASE_URL or install pgserver"
-        )
-    server = pgserver.get_server(
-        str(tmp_path_factory.mktemp("pg")), cleanup_mode="stop"
-    )
-    try:
-        yield str(server.get_uri())
-    finally:
-        server.cleanup()
 
 
 @pytest.fixture(params=["memory", "postgres"])

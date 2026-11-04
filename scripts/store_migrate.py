@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Create the document store tables with the owner role and grant the runtime role (SPEC-002).
 
-    KNOWLEDGE_STORE_OWNER_DATABASE_URL=... uv run python scripts/store_migrate.py --runtime-role knowledge_runtime
+    KNOWLEDGE_STORE_OWNER_DATABASE_URL=... uv run python scripts/store_migrate.py --runtime-role knowledge_runtime \
+        [--relay-role knowledge_relay]
 
 Idempotent. The runtime role (the one in KNOWLEDGE_STORE_DATABASE_URL) gets only SELECT,
-INSERT, UPDATE and DELETE on the two store tables, never DDL. Nothing secret is printed.
+INSERT, UPDATE and DELETE on the two store tables and INSERT on store_outbox (SPEC-003),
+never DDL. The relay role gets only SELECT and UPDATE on store_outbox. Nothing secret is printed.
 """
 
 from __future__ import annotations
@@ -25,12 +27,14 @@ ROLE_RE = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Migrate the knowledge document store")
     parser.add_argument("--runtime-role", required=True)
+    parser.add_argument("--relay-role", help="role used by scripts/relay_outbox.py")
     args = parser.parse_args(argv)
     url = os.environ.get("KNOWLEDGE_STORE_OWNER_DATABASE_URL", "").strip()
     if not url:
         parser.error("set KNOWLEDGE_STORE_OWNER_DATABASE_URL (the owner role)")
-    if not ROLE_RE.fullmatch(args.runtime_role):
-        parser.error("--runtime-role must be a plain lower-case identifier")
+    for role in (args.runtime_role, args.relay_role):
+        if role is not None and not ROLE_RE.fullmatch(role):
+            parser.error("roles must be plain lower-case identifiers")
     store = PostgresStore(url, spaces=("migration",))
     try:
         store.migrate()
@@ -41,6 +45,14 @@ def main(argv: list[str] | None = None) -> int:
                 "GRANT SELECT, INSERT, UPDATE, DELETE ON"
                 f" {store.schema}.store_documents, {store.schema}.store_versions TO {role}"
             )
+            conn.execute(f"GRANT INSERT ON {store.schema}.store_outbox TO {role}")
+            if args.relay_role:
+                conn.execute(
+                    f"GRANT USAGE ON SCHEMA {store.schema} TO {args.relay_role}"
+                )
+                conn.execute(
+                    f"GRANT SELECT, UPDATE ON {store.schema}.store_outbox TO {args.relay_role}"
+                )
     finally:
         store.close()
     print("document store schema is current; runtime grants applied")
