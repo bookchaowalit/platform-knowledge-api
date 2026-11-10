@@ -25,7 +25,7 @@ C4Container
   Rel(http, sentry, "capture on 500")
 ```
 
-Sources: `Dockerfile`, `railway.toml`, `.railway/railway.ts`, `server.py` (`main`, `KnowledgeRequestHandler`, `CatalogStore`, `store_from_env`), `document_store.py` (`PostgresStore.__init__`), `vendor/service-auth/service_auth/__init__.py`, `knowledge_mcp.py`, `scripts/*.py`, `_sentry.py`, `pyproject.toml`
+Sources: `Dockerfile`, `.railway/railway.ts`, `.railway/railway.ts`, `server.py` (`main`, `KnowledgeRequestHandler`, `CatalogStore`, `store_from_env`), `document_store.py` (`PostgresStore.__init__`), `vendor/service-auth/service_auth/__init__.py`, `knowledge_mcp.py`, `scripts/*.py`, `_sentry.py`, `pyproject.toml`
 
 ## Open questions
 

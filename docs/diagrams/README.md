@@ -12,7 +12,7 @@ repo นี้คือ Python service ตัวเดียวบน Railway (`
 | 03 | User flows | done | [03-user-flows.md](03-user-flows.md) | `server.py`, `contracts/knowledge.v1.md`, `knowledge_mcp.py`, `store_sync.py` |
 | 04 | Traceability (RTM) | done | [04-traceability.md](04-traceability.md) | `specs/001`, `specs/002`, code, `tests/`, `git log` |
 | 05 | C4 Context | done | [05-c4-context.md](05-c4-context.md) | `PRODUCT.md`, `README.md`, code, ops records |
-| 06 | C4 Container | done | [06-c4-container.md](06-c4-container.md) | `Dockerfile`, `railway.toml`, `.railway/railway.ts`, code |
+| 06 | C4 Container | done | [06-c4-container.md](06-c4-container.md) | `Dockerfile`, `.railway/railway.ts`, `.railway/railway.ts`, code |
 | 07 | C4 Component | done | [07-c4-component.md](07-c4-component.md) | `server.py`, `document_store.py`, `service_auth`, `_sentry.py` |
 | 08 | ADRs | done (5) | [08-adr/](08-adr/) | code, `Dockerfile`, specs, `git log`, ops records |
 | 09 | ERD | done | [09-erd.md](09-erd.md) | `document_store.py` `SCHEMA_SQL`, `store_migrate.py`, catalog contract |
@@ -22,7 +22,7 @@ repo นี้คือ Python service ตัวเดียวบน Railway (`
 | 13 | Threat model | done | [13-threat-model.md](13-threat-model.md) | code, tests, store-mirror.yml |
 | 14 | Backup & DR | done | [14-backup-dr.md](14-backup-dr.md) | SPEC-002, scripts, ops records |
 | 15 | CI/CD pipeline | done | [15-cicd-pipeline.md](15-cicd-pipeline.md) | `ci.yml`, platform-ci-workflows `ci-python.yml` / `security.yml` @ `87dc5e1c`, `renovate.json` |
-| 16 | Deployment | done | [16-deployment.md](16-deployment.md) | `Dockerfile`, `railway.toml`, `.railway/railway.ts`, `service.yaml`, ops records |
+| 16 | Deployment | done | [16-deployment.md](16-deployment.md) | `Dockerfile`, `.railway/railway.ts`, `.railway/railway.ts`, `service.yaml`, ops records |
 | 17 | Test coverage matrix | done | [17-test-coverage-matrix.md](17-test-coverage-matrix.md) | `tests/`, `ci.yml`, SPEC-002 §6 |
 | 18 | Git & release workflow | done | [18-git-release-workflow.md](18-git-release-workflow.md) | `git log --first-parent`, `gh pr list` |
 | 19 | Service dependency map | done | [19-service-dependency-map.md](19-service-dependency-map.md) | code, `Dockerfile`, ops records |

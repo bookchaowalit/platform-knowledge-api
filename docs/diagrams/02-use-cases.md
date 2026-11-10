@@ -46,7 +46,7 @@ flowchart LR
   MON --> UC9
 ```
 
-Sources: `server.py` (`KnowledgeApi.__init__`, `_store_route`, `handle`), `vendor/service-auth/service_auth/__init__.py` (`AuthPolicy.from_env`, `check_read_auth`), `knowledge_mcp.py` (`build_server`, `StorePut`, `StoreDelete`, `main`), `scripts/deploy_catalog.py`, `scripts/store_sync.py`, `scripts/store_migrate.py`, `railway.toml`, `PRODUCT.md` (Users), ops record: hosted-document-store (2026-11-03) for which PEM block belongs to which caller
+Sources: `server.py` (`KnowledgeApi.__init__`, `_store_route`, `handle`), `vendor/service-auth/service_auth/__init__.py` (`AuthPolicy.from_env`, `check_read_auth`), `knowledge_mcp.py` (`build_server`, `StorePut`, `StoreDelete`, `main`), `scripts/deploy_catalog.py`, `scripts/store_sync.py`, `scripts/store_migrate.py`, `.railway/railway.ts`, `PRODUCT.md` (Users), ops record: hosted-document-store (2026-11-03) for which PEM block belongs to which caller
 
 ## Rules seen in code
 

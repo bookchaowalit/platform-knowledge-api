@@ -25,7 +25,7 @@ flowchart LR
 
 ## Evidence
 
-`Dockerfile`, `.gitignore`, `.railwayignore`, `railway.toml`, `.railway/railway.ts`, `scripts/deploy_catalog.py`, `tests/test_deploy_catalog.py`, `README.md` (Deploy), ops record: knowledge-api-hosted (2026-11-03), ops record: hosted-shared-services (2026-11-03) "Not on CD: platform-knowledge-api"
+`Dockerfile`, `.gitignore`, `.railwayignore`, `.railway/railway.ts`, `.railway/railway.ts`, `scripts/deploy_catalog.py`, `tests/test_deploy_catalog.py`, `README.md` (Deploy), ops record: knowledge-api-hosted (2026-11-03), ops record: hosted-shared-services (2026-11-03) "Not on CD: platform-knowledge-api"
 
 ## Consequences
 

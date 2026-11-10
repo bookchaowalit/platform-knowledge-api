@@ -25,7 +25,7 @@ flowchart TB
 | Live catalog | federated, 1620 docs, revision `15edfbb7…` (2026-11-03) | ops record: knowledge-api-hosted |
 | CD | none | ops record: hosted-shared-services; `README.md` |
 
-Sources: `Dockerfile`, `railway.toml`, `.railway/railway.ts`, `.railwayignore`, `README.md`, `PRODUCT.md`, `service.yaml`, ops records knowledge-api-hosted, hosted-document-store, hosted-shared-services (2026-11-03)
+Sources: `Dockerfile`, `.railway/railway.ts`, `.railway/railway.ts`, `.railwayignore`, `README.md`, `PRODUCT.md`, `service.yaml`, ops records knowledge-api-hosted, hosted-document-store, hosted-shared-services (2026-11-03)
 
 ## Open questions
 

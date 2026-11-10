@@ -34,7 +34,7 @@ catalog สร้างใน solo-empire แต่ต้องมี service �
 | ซอร์สโค้ด | 6 ไฟล์ / 1302 บรรทัด |
 | เทสต์ | 3 ไฟล์ (ไม่ได้รันในงานนี้) |
 | CI | ไม่มี workflow |
-| Deploy config | `railway.toml` + `Dockerfile` (ทะเบียนระบุ staged) |
+| Deploy config | `.railway/railway.ts` + `Dockerfile` (ทะเบียนระบุ staged) |
 | Live URL | ไม่มี |
 
 ## 5. คุณค่าและจุดต่าง
