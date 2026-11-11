@@ -315,3 +315,66 @@ def test_pull_refuses_paths_that_alias_one_file(
     with pytest.raises(store_sync.SyncError, match="collides"):
         store_sync.pull(Aliasing(), SPACE, out)  # type: ignore[arg-type]
     assert (out / "b.md").read_bytes() == b"first"
+
+
+def limited_client(
+    api: KnowledgeApi, *, limit_first: int, retry_after: str | None
+) -> tuple[store_sync.StoreClient, list[float], list[str]]:
+    """A client whose transport answers 429 for the first `limit_first` requests."""
+    waits: list[float] = []
+    seen: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request.method)
+        if len(seen) <= limit_first:
+            headers = {} if retry_after is None else {"Retry-After": retry_after}
+            return httpx.Response(
+                429, headers=headers, json={"error": {"code": "rate_limited"}}
+            )
+        response = api.handle(
+            request.method,
+            str(request.url.raw_path, "ascii"),
+            headers=dict(request.headers),
+            body=request.content,
+        )
+        return httpx.Response(response.status, json=response.payload)
+
+    http = httpx.Client(
+        transport=httpx.MockTransport(handle), base_url="https://api.test"
+    )
+    client = store_sync.StoreClient(
+        http, read_token=lambda: "r", write_token=lambda: "w", sleep=waits.append
+    )
+    return client, waits, seen
+
+
+def test_rate_limited_writes_wait_for_retry_after_and_succeed(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    (tmp_path / "a.md").write_text("# A\n", encoding="utf-8")
+    client, waits, _ = limited_client(api, limit_first=2, retry_after="3")
+    report = store_sync.push(
+        client, SPACE, store_sync.collect(tmp_path, paths=["a.md"])
+    )
+    assert report.failed == []
+    assert report.written == 1
+    assert waits == [3.0, 3.0]
+    assert client_for(api).get(SPACE, "a.md") == b"# A\n"
+
+
+def test_rate_limit_backoff_without_header_is_bounded() -> None:
+    response = httpx.Response(429)
+    assert store_sync.retry_wait(response, 0) == 1.0
+    assert store_sync.retry_wait(response, 3) == 8.0
+    assert store_sync.retry_wait(response, 10) == store_sync.MAX_RETRY_WAIT
+    huge = httpx.Response(429, headers={"Retry-After": "3600"})
+    assert store_sync.retry_wait(huge, 0) == store_sync.MAX_RETRY_WAIT
+
+
+def test_a_rate_limit_that_never_lifts_is_reported(api: KnowledgeApi) -> None:
+    client, waits, _ = limited_client(api, limit_first=10_000, retry_after="1")
+    with pytest.raises(
+        store_sync.SyncError, match=r"^store API answered 429 rate_limited$"
+    ):
+        client.list_all(SPACE)
+    assert len(waits) == store_sync.MAX_RATE_RETRIES

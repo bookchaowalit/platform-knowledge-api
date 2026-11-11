@@ -24,6 +24,7 @@ import hashlib
 import os
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -64,8 +65,29 @@ class Parity:
     extra: list[str] = field(default_factory=list)
 
 
+# The edge gateway answers 429 once a subject passes its per-minute budget; nothing was
+# processed, so the same request is sent again after the wait the gateway asks for.
+RATE_LIMITED = 429
+MAX_RATE_RETRIES = 8
+MAX_RETRY_WAIT = 60.0
+
+
+def retry_wait(response: httpx.Response, attempt: int) -> float:
+    """Seconds to wait: the gateway's Retry-After when given, else exponential backoff."""
+    header = response.headers.get("Retry-After", "")
+    try:
+        wait = float(header)
+    except ValueError:
+        wait = float(2**attempt)
+    return min(max(wait, 0.0), MAX_RETRY_WAIT)
+
+
 class StoreClient:
-    """The store API over HTTP, with a fresh token per call; error bodies are never echoed."""
+    """The store API over HTTP, with a fresh token per call; error bodies are never echoed.
+
+    A 429 from the gateway is retried after its Retry-After (bounded), so a large push
+    slows down to the rate limit instead of failing part-way.
+    """
 
     def __init__(
         self,
@@ -74,6 +96,7 @@ class StoreClient:
         read_token: Callable[[], str],
         write_token: Callable[[], str],
         page: int = 1000,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.http, self.read_token, self.write_token, self.page = (
             http,
@@ -81,6 +104,7 @@ class StoreClient:
             write_token,
             page,
         )
+        self.sleep = sleep
 
     def _call(
         self,
@@ -91,17 +115,21 @@ class StoreClient:
         write: bool = False,
         body: Any = None,
     ) -> dict[str, Any]:
-        token = (self.write_token if write else self.read_token)()
-        try:
-            response = self.http.request(
-                method,
-                path,
-                params=params,
-                json=body,
-                headers={"Authorization": f"Bearer {token}"},
-            )
-        except httpx.HTTPError:
-            raise SyncError("the store API could not be reached") from None
+        for attempt in range(MAX_RATE_RETRIES + 1):
+            token = (self.write_token if write else self.read_token)()
+            try:
+                response = self.http.request(
+                    method,
+                    path,
+                    params=params,
+                    json=body,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            except httpx.HTTPError:
+                raise SyncError("the store API could not be reached") from None
+            if response.status_code != RATE_LIMITED or attempt == MAX_RATE_RETRIES:
+                break
+            self.sleep(retry_wait(response, attempt))
         if response.status_code >= 400:
             code = ""
             with contextlib.suppress(ValueError, KeyError, TypeError):
