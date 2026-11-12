@@ -175,3 +175,24 @@ def test_extra_open_paths_and_duplicate_authorization():
         gateway_http.result_for(check("enforce"), "GET", target, twice, no_body)
         == "invalid"
     )
+
+
+def test_extra_open_prefix_keeps_matching_its_own_paths():
+    for path in ("/api/public/", "/api/public/v1/hook", "/api/public/v1/hook/"):
+        assert (
+            gateway_http.result_for(
+                check("enforce"), "POST", path, headers(), no_body, ("/api/public/",)
+            )
+            is None
+        )
+    assert (
+        gateway_http.result_for(
+            check("enforce"),
+            "POST",
+            "/api/publicx",
+            headers(),
+            no_body,
+            ("/api/public/",),
+        )
+        == "missing"
+    )

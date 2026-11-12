@@ -29,10 +29,12 @@ class Headers(Protocol):
 def _open(path: str, extra_open: tuple[str, ...]) -> bool:
     if gateway.is_open(path):
         return True
-    # One trailing slash is ignored, as gateway.is_open and the routers do.
-    path = path[:-1] if len(path) > 1 and path.endswith("/") else path
+    # One trailing slash is ignored, as gateway.is_open and the routers do; a prefix entry ("/api/public/")
+    # matches the prefix itself and everything under it.
+    trimmed = path[:-1] if len(path) > 1 and path.endswith("/") else path
     return any(
-        path == p or (p.endswith("/") and path.startswith(p)) for p in extra_open
+        trimmed == p or (p.endswith("/") and (trimmed + "/").startswith(p))
+        for p in extra_open
     )
 
 
