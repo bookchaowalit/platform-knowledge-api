@@ -148,3 +148,30 @@ def test_the_handler_refuses_a_direct_call_in_enforce_and_keeps_health_open():
 
 def test_main_installs_the_check_with_the_route_key():
     assert 'GatewayCheck.from_env("knowledge")' in Path(server.__file__).read_text()
+
+
+def test_extra_open_paths_and_duplicate_authorization():
+    assert (
+        gateway_http.result_for(
+            check("enforce"), "GET", "/ready", headers(), no_body, ("/ready",)
+        )
+        is None
+    )
+    hook = "/api/public/v1/hook"
+    assert (
+        gateway_http.result_for(
+            check("enforce"), "POST", hook, headers(), no_body, ("/api/public/",)
+        )
+        is None
+    )
+    assert (
+        gateway_http.result_for(check("enforce"), "GET", "/ready", headers(), no_body)
+        == "missing"
+    )
+    target = "/api/v1/things"
+    twice = headers(X_Gateway_Assertion=signed("GET", target), Authorization="Bearer t")
+    twice["Authorization"] = "Bearer other"
+    assert (
+        gateway_http.result_for(check("enforce"), "GET", target, twice, no_body)
+        == "invalid"
+    )

@@ -1035,7 +1035,12 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
         # The assertion is checked after the API's own preauthorization and body limits, so an
         # anonymous client still never makes the server read a body.
         result = gateway_http.result_for(
-            self.gateway, self.command, self.path, self.headers, lambda: body or b""
+            self.gateway,
+            self.command,
+            self.path,
+            self.headers,
+            lambda: body or b"",
+            extra_open=("/ready",),
         )
         if gateway_http.refused(self.gateway, self.path, result):
             self._write(Response(403, {"error": "gateway_required"}), origin=origin)
