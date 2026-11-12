@@ -20,21 +20,43 @@ class Headers(Protocol):
     def get(self, name: str, default: None = None, /) -> str | None: ...
 
 
-def result_for(check: gateway.GatewayCheck | None, method: str, target: str, headers: Headers,
-               read_body: Callable[[], bytes]) -> str | None:
+def result_for(
+    check: gateway.GatewayCheck | None,
+    method: str,
+    target: str,
+    headers: Headers,
+    read_body: Callable[[], bytes],
+) -> str | None:
     path = urlsplit(target).path
     if check is None or gateway.is_open(path):
         return None
     header = headers.get(gateway.HEADER)
     result = gateway.precheck(header, time.time())
-    if result is None and gateway.body_too_big(headers.get("Content-Length"), headers.get("Transfer-Encoding")):
+    if result is None and gateway.body_too_big(
+        headers.get("Content-Length"), headers.get("Transfer-Encoding")
+    ):
         result = "invalid"
     if result is None:
-        result = gateway.check(check.key, check.system, header, method, target, headers.get("Authorization") or "",
-                               time.time(), headers.get("Content-Type") or "", read_body())
+        result = gateway.check(
+            check.key,
+            check.system,
+            header,
+            method,
+            target,
+            headers.get("Authorization") or "",
+            time.time(),
+            headers.get("Content-Type") or "",
+            read_body(),
+        )
     gateway.report(result, method, path)
     return result
 
 
-def refused(check: gateway.GatewayCheck | None, target: str, result: str | None) -> bool:
-    return check is not None and result is not None and check.refuses(urlsplit(target).path, result)
+def refused(
+    check: gateway.GatewayCheck | None, target: str, result: str | None
+) -> bool:
+    return (
+        check is not None
+        and result is not None
+        and check.refuses(urlsplit(target).path, result)
+    )
