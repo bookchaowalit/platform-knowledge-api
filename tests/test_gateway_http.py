@@ -153,7 +153,7 @@ def test_main_installs_the_check_with_the_route_key():
 def test_extra_open_paths_and_duplicate_authorization():
     assert (
         gateway_http.result_for(
-            check("enforce"), "GET", "/ready", headers(), no_body, ("/ready",)
+            check("enforce"), "GET", "/status/", headers(), no_body, ("/status",)
         )
         is None
     )
@@ -165,7 +165,7 @@ def test_extra_open_paths_and_duplicate_authorization():
         is None
     )
     assert (
-        gateway_http.result_for(check("enforce"), "GET", "/ready", headers(), no_body)
+        gateway_http.result_for(check("enforce"), "GET", "/status", headers(), no_body)
         == "missing"
     )
     target = "/api/v1/things"

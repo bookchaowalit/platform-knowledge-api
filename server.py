@@ -998,6 +998,8 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
     api = KnowledgeApi()
     # SPEC-002 (platform-api-gateway): set in main() from GATEWAY_ASSERTION_*; None = off.
     gateway: gateway.GatewayCheck | None = None
+    # A socket timeout, so a client that stops sending a body cannot hold a worker thread.
+    timeout = 30
 
     def log_message(self, format: str, *args: Any) -> None:
         return

@@ -27,7 +27,11 @@ class Headers(Protocol):
 
 
 def _open(path: str, extra_open: tuple[str, ...]) -> bool:
-    return gateway.is_open(path) or any(
+    if gateway.is_open(path):
+        return True
+    # One trailing slash is ignored, as gateway.is_open and the routers do.
+    path = path[:-1] if len(path) > 1 and path.endswith("/") else path
+    return any(
         path == p or (p.endswith("/") and path.startswith(p)) for p in extra_open
     )
 
