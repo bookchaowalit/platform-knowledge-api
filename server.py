@@ -36,8 +36,13 @@ from urllib.parse import parse_qs, urlsplit
 
 from service_auth import AuthError, AuthPolicy, check_read_auth, is_loopback, readiness
 
+import gateway
+import gateway_http
 from _sentry import capture, init_sentry
 from document_store import PostgresStore, Store, StoreError
+
+# The gateway's knowledge route carries up to 16 MiB (routes.json limits), as does this API.
+gateway.MAX_BODY_BYTES = 16 * 1024 * 1024
 
 init_sentry()
 
@@ -991,6 +996,8 @@ class KnowledgeApi:
 
 class KnowledgeRequestHandler(BaseHTTPRequestHandler):
     api = KnowledgeApi()
+    # SPEC-002 (platform-api-gateway): set in main() from GATEWAY_ASSERTION_*; None = off.
+    gateway: gateway.GatewayCheck | None = None
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -1025,6 +1032,14 @@ class KnowledgeRequestHandler(BaseHTTPRequestHandler):
                 self.close_connection = True
                 self._write(refusal, origin=origin)
                 return
+        # The assertion is checked after the API's own preauthorization and body limits, so an
+        # anonymous client still never makes the server read a body.
+        result = gateway_http.result_for(
+            self.gateway, self.command, self.path, self.headers, lambda: body or b""
+        )
+        if gateway_http.refused(self.gateway, self.path, result):
+            self._write(Response(403, {"error": "gateway_required"}), origin=origin)
+            return
         response = self.api.handle(
             self.command, self.path, headers=dict(self.headers.items()), body=body
         )
@@ -1132,6 +1147,7 @@ def main() -> None:
             parser.error(
                 "a non-loopback --host requires valid KNOWLEDGE_API_AUTH_* configuration"
             )
+    KnowledgeRequestHandler.gateway = gateway.GatewayCheck.from_env("knowledge")
     server = ThreadingHTTPServer((args.host, args.port), KnowledgeRequestHandler)
     print(f"{SERVICE_NAME} running on http://{args.host}:{args.port}", flush=True)
     try:

@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["server", "_sentry", "knowledge_mcp", "document_store", "outbox"]
+py-modules = ["server", "_sentry", "knowledge_mcp", "document_store", "outbox", "gateway", "gateway_http"]
 
 [project.optional-dependencies]
 mcp = ["mcp>=2.3,<3", "httpx>=0.27,<1"]  # knowledge-mcp (knowledge_mcp.py); not needed by the API image
@@ -91,3 +91,9 @@ warn_return_any = true
 [[tool.mypy.overrides]]
 module = ["service_auth"]
 follow_imports = "silent"
+
+# gateway.py is byte-identical to the cellkit cells, where install() wires FastAPI; this service uses
+# only its stdlib functions (gateway_http.py), so FastAPI is not installed here.
+[[tool.mypy.overrides]]
+module = ["fastapi", "fastapi.*"]
+ignore_missing_imports = true

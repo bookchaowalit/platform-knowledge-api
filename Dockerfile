@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 KNOWLEDGE_API_HOST=0.0.0.0 KNOW
     UV_PROJECT_ENVIRONMENT=/opt/venv PATH=/opt/venv/bin:$PATH
 WORKDIR /app
 COPY vendor/service-auth /app/vendor/service-auth
-COPY pyproject.toml uv.lock server.py _sentry.py document_store.py outbox.py /app/
+COPY pyproject.toml uv.lock server.py _sentry.py document_store.py outbox.py gateway.py gateway_http.py /app/
 RUN uv sync --frozen --no-dev --no-editable --no-cache --python /usr/local/bin/python3
 COPY data/document-catalog.json /app/data/document-catalog.json
 RUN chmod -R a+rX /app/data
