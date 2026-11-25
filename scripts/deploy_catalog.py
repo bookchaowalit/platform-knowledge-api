@@ -132,7 +132,7 @@ def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) ->
         return Path(override).expanduser()
     main = main_checkout(repo_root)
     sibling = main.parent / "platform-ops-cli" / "architecture"
-    if sibling.is_dir():
+    if (sibling / "scripts" / "document_catalog.py").is_file():
         return sibling
     return main.parent.parent / "platform-ops-cli" / "architecture"
 
@@ -155,9 +155,10 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
             )
         command = [python, str(generator), "--check"]
         env["SOLO_ARCHITECTURE_ROOT"] = str(docs_root)
+        # Same folder as the check, so a relative SOLO_ARCHITECTURE_DOCS_PYTHON means the same interpreter.
         regenerate = (
-            f"SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} {shlex.quote(python)} "
-            f"{shlex.quote(str(generator))} --write"
+            f"cd {shlex.quote(str(docs_root))} && SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} "
+            f"{shlex.quote(python)} {shlex.quote(str(generator))} --write"
         )
     result = run(command, cwd=docs_root, env=env)
     if result.returncode != 0:
@@ -296,9 +297,17 @@ def main(
     )
     args = parser.parse_args(argv)
     raw_docs_root = (environ.get("SOLO_ARCHITECTURE_DOCS_ROOT") or "").strip()
-    # One normalised root for both the freshness check and the staged catalog.
-    docs_root = Path(raw_docs_root).expanduser().resolve() if raw_docs_root else None
     try:
+        # One normalised root for both the freshness check and the staged catalog; with --source the
+        # variable is not used at all (not even expanded).
+        docs_root = None
+        if raw_docs_root and not args.source:
+            try:
+                docs_root = Path(raw_docs_root).expanduser().resolve()
+            except RuntimeError as error:  # ~unknown-user
+                raise DeployError(
+                    f"SOLO_ARCHITECTURE_DOCS_ROOT cannot be expanded: {error}"
+                ) from None
         source = args.source or (docs_root / DOCS_CATALOG if docs_root else None)
         if source is None:
             raise DeployError("set --source or SOLO_ARCHITECTURE_DOCS_ROOT")
