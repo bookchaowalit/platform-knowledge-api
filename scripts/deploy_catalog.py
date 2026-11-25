@@ -4,8 +4,9 @@
 The catalog is owner-private metadata and never enters git. This is the one
 repeatable path from the generator's output to the running service:
 
-1. freshness: ``scripts/document_catalog.py --check`` in architecture-docs
-   (only when the source comes from ``SOLO_ARCHITECTURE_DOCS_ROOT``);
+1. freshness: ``scripts/document_catalog.py --check`` against the architecture document tree
+   (only when the source comes from ``SOLO_ARCHITECTURE_DOCS_ROOT``); the generator lives in
+   platform-ops-cli/architecture (``SOLO_ARCHITECTURE_TOOLS``) unless the tree still has its own;
 2. validate the source and stage it atomically as ``data/document-catalog.json``;
 3. ``railway up --ci --no-gitignore`` (uploads the git-ignored snapshot);
 4. wait for ``/ready``, then read ``catalog.revision`` with a minted service JWT
@@ -16,6 +17,7 @@ repeatable path from the generator's output to the running service:
 Environment: ``SOLO_ARCHITECTURE_DOCS_ROOT`` (default source), ``EMPIRE_KNOWLEDGE_API``
 (or ``--url``), ``SOLO_WEB_PUBLIC_ORIGIN`` and the MCP key files (see README),
 ``KNOWLEDGE_API_RAILWAY_PROJECT`` / ``_ENVIRONMENT`` / ``_SERVICE``,
+``SOLO_ARCHITECTURE_TOOLS`` (the document tooling; default ../platform-ops-cli/architecture),
 ``SOLO_ARCHITECTURE_DOCS_PYTHON`` (the generator's interpreter; default python3 on PATH
 outside this repository's virtualenv).
 No token, key or catalog row is printed.
@@ -98,14 +100,35 @@ def docs_env(environ: Mapping[str, str]) -> tuple[str, dict[str, str]]:
     return override or shutil.which("python3", path=env["PATH"]) or "python3", env
 
 
+def architecture_tools(environ: Mapping[str, str]) -> Path:
+    """The architecture document tooling (SPEC-001: platform-ops-cli/architecture).
+
+    Override: ``SOLO_ARCHITECTURE_TOOLS``; default the ops-cli clone beside this one
+    (``public/book-products/platform-knowledge-api`` -> ``public/platform-ops-cli``).
+    """
+    override = (environ.get("SOLO_ARCHITECTURE_TOOLS") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    return ROOT.parent.parent / "platform-ops-cli" / "architecture"
+
+
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
     python, env = docs_env(environ)
-    result = run(
-        [python, "scripts/document_catalog.py", "--check"], cwd=docs_root, env=env
-    )
+    if (docs_root / "scripts" / "document_catalog.py").is_file():
+        # Legacy layout: the generator still sits inside the document tree.
+        command = [python, "scripts/document_catalog.py", "--check"]
+    else:
+        generator = architecture_tools(environ) / "scripts" / "document_catalog.py"
+        if not generator.is_file():
+            raise DeployError(
+                "catalog generator not found: set SOLO_ARCHITECTURE_TOOLS to platform-ops-cli/architecture"
+            )
+        command = [python, str(generator), "--check"]
+        env["SOLO_ARCHITECTURE_ROOT"] = str(docs_root)
+    result = run(command, cwd=docs_root, env=env)
     if result.returncode != 0:
         raise DeployError(
-            "catalog is stale: run `task docs:catalog` in architecture-docs first"
+            "catalog is stale: run `task docs:catalog` (platform-ops-cli/architecture) first"
         )
 
 

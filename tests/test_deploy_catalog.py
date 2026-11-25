@@ -78,21 +78,51 @@ class StageTest(unittest.TestCase):
             deploy.stage(self.source, self.dest)
 
 
+def _legacy_docs() -> Path:
+    """A document tree that still carries its own scripts/ (before SPEC-001 phase 1)."""
+    docs = Path(tempfile.mkdtemp())
+    (docs / "scripts").mkdir()
+    (docs / "scripts" / "document_catalog.py").write_text("# fixture\n")
+    return docs
+
+
 class FreshnessTest(unittest.TestCase):
     def test_runs_generator_check_in_docs_root(self):
+        docs = _legacy_docs()
         run = Recorder()
         env = {"SOLO_ARCHITECTURE_DOCS_PYTHON": "/opt/py/bin/python3"}
-        deploy.check_fresh(Path("/docs"), run=run, environ=env)
+        deploy.check_fresh(docs, run=run, environ=env)
         assert run.calls == [
-            (["/opt/py/bin/python3", "scripts/document_catalog.py", "--check"], "/docs")
+            (["/opt/py/bin/python3", "scripts/document_catalog.py", "--check"], str(docs))
         ]
+
+    def test_document_tree_without_scripts_uses_the_architecture_tools(self):
+        # SPEC-001: the generator lives in platform-ops-cli/architecture and is told where the documents are.
+        docs = Path(tempfile.mkdtemp())
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        run = Recorder()
+        env = {"SOLO_ARCHITECTURE_DOCS_PYTHON": "/opt/py/bin/python3", "SOLO_ARCHITECTURE_TOOLS": str(tools)}
+        deploy.check_fresh(docs, run=run, environ=env)
+        assert run.calls == [
+            (["/opt/py/bin/python3", str(tools / "scripts" / "document_catalog.py"), "--check"], str(docs))
+        ]
+        assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str(docs)
+
+    def test_missing_architecture_tools_is_a_deploy_error(self):
+        docs = Path(tempfile.mkdtemp())
+        run = Recorder()
+        with pytest.raises(deploy.DeployError, match="SOLO_ARCHITECTURE_TOOLS"):
+            deploy.check_fresh(docs, run=run, environ={"SOLO_ARCHITECTURE_TOOLS": str(docs / "absent")})
+        assert run.calls == []
 
     def test_generator_never_runs_on_this_repos_venv(self):
         # Its output differs between Python versions, so it must use the docs repo's own python3.
         venv_bin = str(Path(sys.prefix) / "bin")
         run = Recorder()
         deploy.check_fresh(
-            Path("/docs"),
+            _legacy_docs(),
             run=run,
             environ={"PATH": venv_bin + ":/usr/bin:/bin", "VIRTUAL_ENV": sys.prefix},
         )
@@ -102,7 +132,7 @@ class FreshnessTest(unittest.TestCase):
 
     def test_stale_generator_output_aborts(self):
         with pytest.raises(deploy.DeployError):
-            deploy.check_fresh(Path("/docs"), run=Recorder(returncode=1), environ={})
+            deploy.check_fresh(_legacy_docs(), run=Recorder(returncode=1), environ={})
 
 
 class RailwayTest(unittest.TestCase):
@@ -252,6 +282,8 @@ class MainTest(unittest.TestCase):
         docs = self.root / "architecture-docs"
         (docs / "data" / "indexes").mkdir(parents=True)
         write_catalog(docs / "data" / "indexes" / "document-catalog.json", "a.md")
+        (docs / "scripts").mkdir()
+        (docs / "scripts" / "document_catalog.py").write_text("# fixture\n")
         run = Recorder()
         code = deploy.main(
             ["--dry-run"],
