@@ -6,6 +6,7 @@ import hashlib
 import http.server
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -122,6 +123,66 @@ class FreshnessTest(unittest.TestCase):
             )
         ]
         assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str(docs)
+
+    def test_relative_roots_are_made_absolute_before_the_subprocess(self):
+        # The subprocess runs with cwd=docs_root, so a relative path would be resolved twice.
+        base = Path(tempfile.mkdtemp())
+        (base / "docs").mkdir()
+        (base / "tools" / "scripts").mkdir(parents=True)
+        (base / "tools" / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        run = Recorder()
+        old = os.getcwd()
+        os.chdir(base)
+        try:
+            deploy.check_fresh(
+                Path("docs"), run=run, environ={"SOLO_ARCHITECTURE_TOOLS": "tools"}
+            )
+        finally:
+            os.chdir(old)
+        command, cwd = run.calls[0]
+        assert command[1] == str(
+            (base / "tools" / "scripts" / "document_catalog.py").resolve()
+        )
+        assert cwd == str((base / "docs").resolve())
+        assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str((base / "docs").resolve())
+
+    def test_default_tools_come_from_the_main_clone_of_a_linked_worktree(self):
+        # empire layout: worktrees/<name> is a linked worktree of repositories/.../platform-knowledge-api
+        base = Path(tempfile.mkdtemp())
+        main = (
+            base
+            / "repositories"
+            / "public"
+            / "book-products"
+            / "platform-knowledge-api"
+        )
+        (main / ".git" / "worktrees" / "wt").mkdir(parents=True)
+        worktree = base / "worktrees" / "wt"
+        worktree.mkdir(parents=True)
+        (worktree / ".git").write_text(
+            f"gitdir: {main / '.git' / 'worktrees' / 'wt'}\n"
+        )
+        tools = base / "repositories" / "public" / "platform-ops-cli" / "architecture"
+        assert deploy.architecture_tools({}, repo_root=worktree) == tools
+        assert deploy.architecture_tools({}, repo_root=main) == tools
+
+    def test_stale_message_names_the_generator_and_root_that_failed(self):
+        docs = Path(tempfile.mkdtemp())
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        with pytest.raises(deploy.DeployError) as error:
+            deploy.check_fresh(
+                docs,
+                run=Recorder(returncode=1),
+                environ={"SOLO_ARCHITECTURE_TOOLS": str(tools)},
+            )
+        message = str(error.value)
+        assert f"SOLO_ARCHITECTURE_ROOT={docs.resolve()}" in message
+        assert (
+            f"{(tools / 'scripts' / 'document_catalog.py').resolve()} --write"
+            in message
+        )
 
     def test_missing_architecture_tools_is_a_deploy_error(self):
         docs = Path(tempfile.mkdtemp())

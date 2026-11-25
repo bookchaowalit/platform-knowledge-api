@@ -100,36 +100,57 @@ def docs_env(environ: Mapping[str, str]) -> tuple[str, dict[str, str]]:
     return override or shutil.which("python3", path=env["PATH"]) or "python3", env
 
 
-def architecture_tools(environ: Mapping[str, str]) -> Path:
+def main_checkout(repo_root: Path) -> Path:
+    """The main clone of ``repo_root``: itself, or for a linked worktree (``.git`` is a file
+    ``gitdir: <main>/.git/worktrees/<name>``) the clone it belongs to."""
+    marker = repo_root / ".git"
+    if marker.is_file():
+        text = marker.read_text(encoding="utf-8", errors="replace").strip()
+        if text.startswith("gitdir:"):
+            gitdir = Path(text[len("gitdir:") :].strip())
+            if (
+                gitdir.parent.name == "worktrees"
+                and gitdir.parent.parent.name == ".git"
+            ):
+                return gitdir.parent.parent.parent
+    return repo_root
+
+
+def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) -> Path:
     """The architecture document tooling (SPEC-001: platform-ops-cli/architecture).
 
-    Override: ``SOLO_ARCHITECTURE_TOOLS``; default the ops-cli clone beside this one
-    (``public/book-products/platform-knowledge-api`` -> ``public/platform-ops-cli``).
+    Override: ``SOLO_ARCHITECTURE_TOOLS``; default the ops-cli clone beside this repository's
+    main clone (``public/book-products/platform-knowledge-api`` -> ``public/platform-ops-cli``),
+    also when this runs from a linked worktree outside the clone folder.
     """
     override = (environ.get("SOLO_ARCHITECTURE_TOOLS") or "").strip()
     if override:
         return Path(override).expanduser()
-    return ROOT.parent.parent / "platform-ops-cli" / "architecture"
+    return main_checkout(repo_root).parent.parent / "platform-ops-cli" / "architecture"
 
 
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
     python, env = docs_env(environ)
+    # The subprocess runs in docs_root, so every path it gets must be absolute.
+    docs_root = docs_root.expanduser().resolve()
     if (docs_root / "scripts" / "document_catalog.py").is_file():
         # Legacy layout: the generator still sits inside the document tree.
         command = [python, "scripts/document_catalog.py", "--check"]
+        regenerate = f"cd {docs_root} && {python} scripts/document_catalog.py --write"
     else:
-        generator = architecture_tools(environ) / "scripts" / "document_catalog.py"
+        generator = (
+            architecture_tools(environ) / "scripts" / "document_catalog.py"
+        ).resolve()
         if not generator.is_file():
             raise DeployError(
                 "catalog generator not found: set SOLO_ARCHITECTURE_TOOLS to platform-ops-cli/architecture"
             )
         command = [python, str(generator), "--check"]
         env["SOLO_ARCHITECTURE_ROOT"] = str(docs_root)
+        regenerate = f"SOLO_ARCHITECTURE_ROOT={docs_root} {python} {generator} --write"
     result = run(command, cwd=docs_root, env=env)
     if result.returncode != 0:
-        raise DeployError(
-            "catalog is stale: run `task docs:catalog` (platform-ops-cli/architecture) first"
-        )
+        raise DeployError(f"catalog is stale: regenerate it with `{regenerate}` first")
 
 
 def stage(source: Path, dest: Path) -> Staged:
