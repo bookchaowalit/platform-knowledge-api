@@ -129,7 +129,12 @@ def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) ->
     """
     override = (environ.get("SOLO_ARCHITECTURE_TOOLS") or "").strip()
     if override:
-        return Path(override).expanduser()
+        try:
+            return Path(override).expanduser()
+        except RuntimeError as error:  # ~unknown-user
+            raise DeployError(
+                f"SOLO_ARCHITECTURE_TOOLS cannot be expanded: {error}"
+            ) from None
     main = main_checkout(repo_root)
     sibling = main.parent / "platform-ops-cli" / "architecture"
     if (sibling / "scripts" / "document_catalog.py").is_file():
@@ -160,6 +165,13 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
             f"cd {shlex.quote(str(docs_root))} && SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} "
             f"{shlex.quote(python)} {shlex.quote(str(generator))} --write"
         )
+    # The hint names the interpreter the check really used (found on the check's PATH, which
+    # leaves this repository's virtualenv out), not whatever python3 the caller's shell finds.
+    resolved = (
+        shutil.which(python, path=env.get("PATH")) if os.sep not in python else None
+    )
+    if resolved:
+        regenerate = regenerate.replace(shlex.quote(python), shlex.quote(resolved), 1)
     result = run(command, cwd=docs_root, env=env)
     if result.returncode != 0:
         raise DeployError(f"catalog is stale: regenerate it with `{regenerate}` first")
