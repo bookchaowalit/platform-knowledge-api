@@ -122,13 +122,15 @@ JWT minting (httpx, mcp, PyJWT, cryptography), and a plain `uv sync` stops with 
 
 ```bash
 export SOLO_ARCHITECTURE_DOCS_ROOT=/path/to/architecture-docs
+export SOLO_ARCHITECTURE_TOOLS=/path/to/platform-ops-cli/architecture   # default: the sibling ops-cli clone
 export EMPIRE_KNOWLEDGE_API=https://<api-host> SOLO_WEB_PUBLIC_ORIGIN=https://<solo-web-host>
 export KNOWLEDGE_API_RAILWAY_PROJECT=<project-id>   # omit in a railway-linked checkout
 uv run python scripts/deploy_catalog.py --dry-run   # freshness + validate + stage only
 uv run python scripts/deploy_catalog.py             # ...then railway up and live verification
 ```
 
-Steps: the generator check (`scripts/document_catalog.py --check` in architecture-docs) must pass;
+Steps: the generator check (`scripts/document_catalog.py --check`, from platform-ops-cli/architecture
+since architecture-docs SPEC-001 moved the tooling there; a tree that still has its own `scripts/` uses that) must pass;
 the source is validated and staged atomically; `railway up --ci --no-gitignore` uploads it; the
 script waits for `/ready` 200 and then requires the live `catalog.revision` (read with a JWT minted
 like the MCP's, see [MCP server](#mcp-server-knowledge-mcp)) to equal the staged snapshot's SHA-256.

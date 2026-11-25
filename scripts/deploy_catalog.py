@@ -4,8 +4,9 @@
 The catalog is owner-private metadata and never enters git. This is the one
 repeatable path from the generator's output to the running service:
 
-1. freshness: ``scripts/document_catalog.py --check`` in architecture-docs
-   (only when the source comes from ``SOLO_ARCHITECTURE_DOCS_ROOT``);
+1. freshness: ``scripts/document_catalog.py --check`` against the architecture document tree
+   (only when the source comes from ``SOLO_ARCHITECTURE_DOCS_ROOT``); the generator lives in
+   platform-ops-cli/architecture (``SOLO_ARCHITECTURE_TOOLS``) unless the tree still has its own;
 2. validate the source and stage it atomically as ``data/document-catalog.json``;
 3. ``railway up --ci --no-gitignore`` (uploads the git-ignored snapshot);
 4. wait for ``/ready``, then read ``catalog.revision`` with a minted service JWT
@@ -16,6 +17,7 @@ repeatable path from the generator's output to the running service:
 Environment: ``SOLO_ARCHITECTURE_DOCS_ROOT`` (default source), ``EMPIRE_KNOWLEDGE_API``
 (or ``--url``), ``SOLO_WEB_PUBLIC_ORIGIN`` and the MCP key files (see README),
 ``KNOWLEDGE_API_RAILWAY_PROJECT`` / ``_ENVIRONMENT`` / ``_SERVICE``,
+``SOLO_ARCHITECTURE_TOOLS`` (the document tooling; default ../platform-ops-cli/architecture),
 ``SOLO_ARCHITECTURE_DOCS_PYTHON`` (the generator's interpreter; default python3 on PATH
 outside this repository's virtualenv).
 No token, key or catalog row is printed.
@@ -28,6 +30,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -98,15 +101,67 @@ def docs_env(environ: Mapping[str, str]) -> tuple[str, dict[str, str]]:
     return override or shutil.which("python3", path=env["PATH"]) or "python3", env
 
 
+def main_checkout(repo_root: Path) -> Path:
+    """The main clone of ``repo_root``: itself, or for a linked worktree (``.git`` is a file
+    ``gitdir: <main>/.git/worktrees/<name>``) the clone it belongs to."""
+    marker = repo_root / ".git"
+    if marker.is_file():
+        text = marker.read_text(encoding="utf-8", errors="replace").strip()
+        if text.startswith("gitdir:"):
+            gitdir = Path(text[len("gitdir:") :].strip())
+            if not gitdir.is_absolute():  # git worktree add --relative-paths
+                gitdir = (marker.parent / gitdir).resolve()
+            if (
+                gitdir.parent.name == "worktrees"
+                and gitdir.parent.parent.name == ".git"
+            ):
+                return gitdir.parent.parent.parent
+    return repo_root
+
+
+def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) -> Path:
+    """The architecture document tooling (SPEC-001: platform-ops-cli/architecture).
+
+    Override: ``SOLO_ARCHITECTURE_TOOLS``; default ``../platform-ops-cli/architecture`` beside
+    this repository's main clone, else the empire layout (``public/book-products/
+    platform-knowledge-api`` -> ``public/platform-ops-cli``); a linked worktree resolves from
+    its main clone.
+    """
+    override = (environ.get("SOLO_ARCHITECTURE_TOOLS") or "").strip()
+    if override:
+        return Path(override).expanduser()
+    main = main_checkout(repo_root)
+    sibling = main.parent / "platform-ops-cli" / "architecture"
+    if sibling.is_dir():
+        return sibling
+    return main.parent.parent / "platform-ops-cli" / "architecture"
+
+
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
     python, env = docs_env(environ)
-    result = run(
-        [python, "scripts/document_catalog.py", "--check"], cwd=docs_root, env=env
-    )
-    if result.returncode != 0:
-        raise DeployError(
-            "catalog is stale: run `task docs:catalog` in architecture-docs first"
+    # The subprocess runs in docs_root, so every path it gets must be absolute.
+    docs_root = docs_root.expanduser().resolve()
+    if (docs_root / "scripts" / "document_catalog.py").is_file():
+        # Legacy layout: the generator still sits inside the document tree.
+        command = [python, "scripts/document_catalog.py", "--check"]
+        regenerate = f"cd {shlex.quote(str(docs_root))} && {shlex.quote(python)} scripts/document_catalog.py --write"
+    else:
+        generator = (
+            architecture_tools(environ) / "scripts" / "document_catalog.py"
+        ).resolve()
+        if not generator.is_file():
+            raise DeployError(
+                "catalog generator not found: set SOLO_ARCHITECTURE_TOOLS to platform-ops-cli/architecture"
+            )
+        command = [python, str(generator), "--check"]
+        env["SOLO_ARCHITECTURE_ROOT"] = str(docs_root)
+        regenerate = (
+            f"SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} {shlex.quote(python)} "
+            f"{shlex.quote(str(generator))} --write"
         )
+    result = run(command, cwd=docs_root, env=env)
+    if result.returncode != 0:
+        raise DeployError(f"catalog is stale: regenerate it with `{regenerate}` first")
 
 
 def stage(source: Path, dest: Path) -> Staged:
@@ -240,13 +295,15 @@ def main(
         "--no-freshness-check", action="store_true", help="skip the generator check"
     )
     args = parser.parse_args(argv)
-    docs_root = (environ.get("SOLO_ARCHITECTURE_DOCS_ROOT") or "").strip()
+    raw_docs_root = (environ.get("SOLO_ARCHITECTURE_DOCS_ROOT") or "").strip()
+    # One normalised root for both the freshness check and the staged catalog.
+    docs_root = Path(raw_docs_root).expanduser().resolve() if raw_docs_root else None
     try:
-        source = args.source or (Path(docs_root) / DOCS_CATALOG if docs_root else None)
+        source = args.source or (docs_root / DOCS_CATALOG if docs_root else None)
         if source is None:
             raise DeployError("set --source or SOLO_ARCHITECTURE_DOCS_ROOT")
         if docs_root and not args.source and not args.no_freshness_check:
-            check_fresh(Path(docs_root), run=run, environ=environ)
+            check_fresh(docs_root, run=run, environ=environ)
         staged = stage(source, dest)
         print(f"staged {staged.documents} documents, revision {staged.revision}")
         if args.dry_run:
