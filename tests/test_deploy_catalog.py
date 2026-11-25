@@ -122,7 +122,7 @@ class FreshnessTest(unittest.TestCase):
                 str(docs),
             )
         ]
-        assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str(docs)
+        assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str(docs.resolve())
 
     def test_relative_roots_are_made_absolute_before_the_subprocess(self):
         # The subprocess runs with cwd=docs_root, so a relative path would be resolved twice.
@@ -208,6 +208,47 @@ class FreshnessTest(unittest.TestCase):
                 environ={"SOLO_ARCHITECTURE_TOOLS": str(tools)},
             )
         assert f"SOLO_ARCHITECTURE_ROOT='{docs.resolve()}'" in str(error.value)
+
+    def test_sibling_without_the_generator_falls_back_to_the_empire_layout(self):
+        base = Path(tempfile.mkdtemp())
+        repo = base / "public" / "book-products" / "platform-knowledge-api"
+        repo.mkdir(parents=True)
+        (base / "public" / "book-products" / "platform-ops-cli" / "architecture").mkdir(
+            parents=True
+        )
+        empire = base / "public" / "platform-ops-cli" / "architecture"
+        assert deploy.architecture_tools({}, repo_root=repo) == empire
+
+    def test_source_flag_ignores_an_unexpandable_docs_root(self):
+        source = Path(tempfile.mkdtemp()) / "catalog.json"
+        write_catalog(source, "a.md")
+        dest = Path(tempfile.mkdtemp()) / "document-catalog.json"
+        code = deploy.main(
+            ["--dry-run", "--source", str(source)],
+            dest=dest,
+            run=Recorder(),
+            fetch=lambda u, token=None: (200, {}),
+            token=lambda: "t",
+            sleep=lambda _s: None,
+            environ={"SOLO_ARCHITECTURE_DOCS_ROOT": "~no-such-user-xyz/docs"},
+        )
+        assert code == 0
+
+    def test_regenerate_hint_runs_in_the_checked_folder(self):
+        docs = Path(tempfile.mkdtemp())
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        with pytest.raises(deploy.DeployError) as error:
+            deploy.check_fresh(
+                docs,
+                run=Recorder(returncode=1),
+                environ={
+                    "SOLO_ARCHITECTURE_TOOLS": str(tools),
+                    "SOLO_ARCHITECTURE_DOCS_PYTHON": ".venv/bin/python",
+                },
+            )
+        assert f"cd {docs.resolve()} && " in str(error.value)
 
     def test_stale_message_names_the_generator_and_root_that_failed(self):
         docs = Path(tempfile.mkdtemp())
@@ -414,7 +455,7 @@ class MainTest(unittest.TestCase):
             environ={"SOLO_ARCHITECTURE_DOCS_ROOT": str(docs)},
         )
         assert code == 0
-        assert run.calls[0][1] == str(docs)
+        assert run.calls[0][1] == str(docs.resolve())
 
     def test_tilde_docs_root_is_checked_and_staged_from_the_same_tree(self):
         docs = self.root / "architecture-docs"
