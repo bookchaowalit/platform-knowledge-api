@@ -166,6 +166,49 @@ class FreshnessTest(unittest.TestCase):
         assert deploy.architecture_tools({}, repo_root=worktree) == tools
         assert deploy.architecture_tools({}, repo_root=main) == tools
 
+    def test_plain_sibling_tools_come_before_the_empire_layout(self):
+        base = Path(tempfile.mkdtemp())
+        repo = base / "platform-knowledge-api"
+        repo.mkdir()
+        sibling = base / "platform-ops-cli" / "architecture"
+        (sibling / "scripts").mkdir(parents=True)
+        (sibling / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        assert deploy.architecture_tools({}, repo_root=repo) == sibling
+
+    def test_relative_gitdir_of_a_linked_worktree(self):
+        base = Path(tempfile.mkdtemp())
+        main = (
+            base
+            / "repositories"
+            / "public"
+            / "book-products"
+            / "platform-knowledge-api"
+        )
+        (main / ".git" / "worktrees" / "wt").mkdir(parents=True)
+        worktree = base / "worktrees" / "wt"
+        worktree.mkdir(parents=True)
+        (worktree / ".git").write_text(
+            "gitdir: ../../repositories/public/book-products/platform-knowledge-api/.git/worktrees/wt\n"
+        )
+        tools = (
+            base / "repositories" / "public" / "platform-ops-cli" / "architecture"
+        ).resolve()
+        assert deploy.architecture_tools({}, repo_root=worktree) == tools
+
+    def test_regenerate_hint_is_shell_quoted(self):
+        docs = Path(tempfile.mkdtemp()) / "my docs"
+        docs.mkdir()
+        tools = Path(tempfile.mkdtemp()) / "my tools"
+        (tools / "scripts").mkdir(parents=True)
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        with pytest.raises(deploy.DeployError) as error:
+            deploy.check_fresh(
+                docs,
+                run=Recorder(returncode=1),
+                environ={"SOLO_ARCHITECTURE_TOOLS": str(tools)},
+            )
+        assert f"SOLO_ARCHITECTURE_ROOT='{docs.resolve()}'" in str(error.value)
+
     def test_stale_message_names_the_generator_and_root_that_failed(self):
         docs = Path(tempfile.mkdtemp())
         tools = Path(tempfile.mkdtemp())
@@ -372,6 +415,27 @@ class MainTest(unittest.TestCase):
         )
         assert code == 0
         assert run.calls[0][1] == str(docs)
+
+    def test_tilde_docs_root_is_checked_and_staged_from_the_same_tree(self):
+        docs = self.root / "architecture-docs"
+        (docs / "data" / "indexes").mkdir(parents=True)
+        write_catalog(docs / "data" / "indexes" / "document-catalog.json", "a.md")
+        (docs / "scripts").mkdir()
+        (docs / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        run = Recorder()
+        with unittest.mock.patch.dict(os.environ, {"HOME": str(self.root)}):
+            code = deploy.main(
+                ["--dry-run"],
+                dest=self.dest,
+                run=run,
+                fetch=lambda u, token=None: (200, {}),
+                token=lambda: "t",
+                sleep=lambda _s: None,
+                environ={"SOLO_ARCHITECTURE_DOCS_ROOT": "~/architecture-docs"},
+            )
+        assert code == 0
+        assert run.calls[0][1] == str(docs.resolve())
+        assert self.dest.is_file()
 
 
 class FetchTest(unittest.TestCase):

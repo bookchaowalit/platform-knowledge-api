@@ -30,6 +30,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -108,6 +109,8 @@ def main_checkout(repo_root: Path) -> Path:
         text = marker.read_text(encoding="utf-8", errors="replace").strip()
         if text.startswith("gitdir:"):
             gitdir = Path(text[len("gitdir:") :].strip())
+            if not gitdir.is_absolute():  # git worktree add --relative-paths
+                gitdir = (marker.parent / gitdir).resolve()
             if (
                 gitdir.parent.name == "worktrees"
                 and gitdir.parent.parent.name == ".git"
@@ -119,14 +122,19 @@ def main_checkout(repo_root: Path) -> Path:
 def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) -> Path:
     """The architecture document tooling (SPEC-001: platform-ops-cli/architecture).
 
-    Override: ``SOLO_ARCHITECTURE_TOOLS``; default the ops-cli clone beside this repository's
-    main clone (``public/book-products/platform-knowledge-api`` -> ``public/platform-ops-cli``),
-    also when this runs from a linked worktree outside the clone folder.
+    Override: ``SOLO_ARCHITECTURE_TOOLS``; default ``../platform-ops-cli/architecture`` beside
+    this repository's main clone, else the empire layout (``public/book-products/
+    platform-knowledge-api`` -> ``public/platform-ops-cli``); a linked worktree resolves from
+    its main clone.
     """
     override = (environ.get("SOLO_ARCHITECTURE_TOOLS") or "").strip()
     if override:
         return Path(override).expanduser()
-    return main_checkout(repo_root).parent.parent / "platform-ops-cli" / "architecture"
+    main = main_checkout(repo_root)
+    sibling = main.parent / "platform-ops-cli" / "architecture"
+    if sibling.is_dir():
+        return sibling
+    return main.parent.parent / "platform-ops-cli" / "architecture"
 
 
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
@@ -136,7 +144,7 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
     if (docs_root / "scripts" / "document_catalog.py").is_file():
         # Legacy layout: the generator still sits inside the document tree.
         command = [python, "scripts/document_catalog.py", "--check"]
-        regenerate = f"cd {docs_root} && {python} scripts/document_catalog.py --write"
+        regenerate = f"cd {shlex.quote(str(docs_root))} && {shlex.quote(python)} scripts/document_catalog.py --write"
     else:
         generator = (
             architecture_tools(environ) / "scripts" / "document_catalog.py"
@@ -147,7 +155,10 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
             )
         command = [python, str(generator), "--check"]
         env["SOLO_ARCHITECTURE_ROOT"] = str(docs_root)
-        regenerate = f"SOLO_ARCHITECTURE_ROOT={docs_root} {python} {generator} --write"
+        regenerate = (
+            f"SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} {shlex.quote(python)} "
+            f"{shlex.quote(str(generator))} --write"
+        )
     result = run(command, cwd=docs_root, env=env)
     if result.returncode != 0:
         raise DeployError(f"catalog is stale: regenerate it with `{regenerate}` first")
@@ -284,13 +295,15 @@ def main(
         "--no-freshness-check", action="store_true", help="skip the generator check"
     )
     args = parser.parse_args(argv)
-    docs_root = (environ.get("SOLO_ARCHITECTURE_DOCS_ROOT") or "").strip()
+    raw_docs_root = (environ.get("SOLO_ARCHITECTURE_DOCS_ROOT") or "").strip()
+    # One normalised root for both the freshness check and the staged catalog.
+    docs_root = Path(raw_docs_root).expanduser().resolve() if raw_docs_root else None
     try:
-        source = args.source or (Path(docs_root) / DOCS_CATALOG if docs_root else None)
+        source = args.source or (docs_root / DOCS_CATALOG if docs_root else None)
         if source is None:
             raise DeployError("set --source or SOLO_ARCHITECTURE_DOCS_ROOT")
         if docs_root and not args.source and not args.no_freshness_check:
-            check_fresh(Path(docs_root), run=run, environ=environ)
+            check_fresh(docs_root, run=run, environ=environ)
         staged = stage(source, dest)
         print(f"staged {staged.documents} documents, revision {staged.revision}")
         if args.dry_run:
