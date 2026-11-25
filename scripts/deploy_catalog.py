@@ -144,12 +144,17 @@ def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) ->
 
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
     python, env = docs_env(environ)
+    # The hint names the interpreter the check really uses (found on the check's PATH, which leaves
+    # this repository's virtualenv out), not whatever python3 the caller's shell finds.
+    shown = (
+        shutil.which(python, path=env.get("PATH")) if os.sep not in python else None
+    ) or python
     # The subprocess runs in docs_root, so every path it gets must be absolute.
     docs_root = docs_root.expanduser().resolve()
     if (docs_root / "scripts" / "document_catalog.py").is_file():
         # Legacy layout: the generator still sits inside the document tree.
         command = [python, "scripts/document_catalog.py", "--check"]
-        regenerate = f"cd {shlex.quote(str(docs_root))} && {shlex.quote(python)} scripts/document_catalog.py --write"
+        regenerate = f"cd {shlex.quote(str(docs_root))} && {shlex.quote(shown)} scripts/document_catalog.py --write"
     else:
         generator = (
             architecture_tools(environ) / "scripts" / "document_catalog.py"
@@ -163,15 +168,8 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
         # Same folder as the check, so a relative SOLO_ARCHITECTURE_DOCS_PYTHON means the same interpreter.
         regenerate = (
             f"cd {shlex.quote(str(docs_root))} && SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} "
-            f"{shlex.quote(python)} {shlex.quote(str(generator))} --write"
+            f"{shlex.quote(shown)} {shlex.quote(str(generator))} --write"
         )
-    # The hint names the interpreter the check really used (found on the check's PATH, which
-    # leaves this repository's virtualenv out), not whatever python3 the caller's shell finds.
-    resolved = (
-        shutil.which(python, path=env.get("PATH")) if os.sep not in python else None
-    )
-    if resolved:
-        regenerate = regenerate.replace(shlex.quote(python), shlex.quote(resolved), 1)
     result = run(command, cwd=docs_root, env=env)
     if result.returncode != 0:
         raise DeployError(f"catalog is stale: regenerate it with `{regenerate}` first")
