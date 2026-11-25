@@ -93,7 +93,10 @@ class FreshnessTest(unittest.TestCase):
         env = {"SOLO_ARCHITECTURE_DOCS_PYTHON": "/opt/py/bin/python3"}
         deploy.check_fresh(docs, run=run, environ=env)
         assert run.calls == [
-            (["/opt/py/bin/python3", "scripts/document_catalog.py", "--check"], str(docs))
+            (
+                ["/opt/py/bin/python3", "scripts/document_catalog.py", "--check"],
+                str(docs),
+            )
         ]
 
     def test_document_tree_without_scripts_uses_the_architecture_tools(self):
@@ -103,10 +106,20 @@ class FreshnessTest(unittest.TestCase):
         (tools / "scripts").mkdir()
         (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
         run = Recorder()
-        env = {"SOLO_ARCHITECTURE_DOCS_PYTHON": "/opt/py/bin/python3", "SOLO_ARCHITECTURE_TOOLS": str(tools)}
+        env = {
+            "SOLO_ARCHITECTURE_DOCS_PYTHON": "/opt/py/bin/python3",
+            "SOLO_ARCHITECTURE_TOOLS": str(tools),
+        }
         deploy.check_fresh(docs, run=run, environ=env)
         assert run.calls == [
-            (["/opt/py/bin/python3", str(tools / "scripts" / "document_catalog.py"), "--check"], str(docs))
+            (
+                [
+                    "/opt/py/bin/python3",
+                    str(tools / "scripts" / "document_catalog.py"),
+                    "--check",
+                ],
+                str(docs),
+            )
         ]
         assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str(docs)
 
@@ -114,7 +127,9 @@ class FreshnessTest(unittest.TestCase):
         docs = Path(tempfile.mkdtemp())
         run = Recorder()
         with pytest.raises(deploy.DeployError, match="SOLO_ARCHITECTURE_TOOLS"):
-            deploy.check_fresh(docs, run=run, environ={"SOLO_ARCHITECTURE_TOOLS": str(docs / "absent")})
+            deploy.check_fresh(
+                docs, run=run, environ={"SOLO_ARCHITECTURE_TOOLS": str(docs / "absent")}
+            )
         assert run.calls == []
 
     def test_generator_never_runs_on_this_repos_venv(self):
