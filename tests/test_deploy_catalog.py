@@ -96,7 +96,7 @@ class FreshnessTest(unittest.TestCase):
         assert run.calls == [
             (
                 ["/opt/py/bin/python3", "scripts/document_catalog.py", "--check"],
-                str(docs),
+                str(docs.resolve()),
             )
         ]
 
@@ -116,10 +116,10 @@ class FreshnessTest(unittest.TestCase):
             (
                 [
                     "/opt/py/bin/python3",
-                    str(tools / "scripts" / "document_catalog.py"),
+                    str((tools / "scripts" / "document_catalog.py").resolve()),
                     "--check",
                 ],
-                str(docs),
+                str(docs.resolve()),
             )
         ]
         assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str(docs.resolve())
@@ -249,6 +249,30 @@ class FreshnessTest(unittest.TestCase):
                 },
             )
         assert f"cd {docs.resolve()} && " in str(error.value)
+
+    def test_unexpandable_tools_setting_is_a_deploy_error(self):
+        with pytest.raises(deploy.DeployError, match="SOLO_ARCHITECTURE_TOOLS"):
+            deploy.architecture_tools(
+                {"SOLO_ARCHITECTURE_TOOLS": "~no-such-user-xyz/architecture"}
+            )
+
+    def test_regenerate_hint_names_the_interpreter_the_check_used(self):
+        docs = Path(tempfile.mkdtemp())
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        bindir = Path(tempfile.mkdtemp())
+        fake = bindir / "python3"
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+        environ = {
+            "SOLO_ARCHITECTURE_TOOLS": str(tools),
+            "SOLO_ARCHITECTURE_DOCS_PYTHON": "python3",
+            "PATH": f"{bindir}:/usr/bin:/bin",
+        }
+        with pytest.raises(deploy.DeployError) as error:
+            deploy.check_fresh(docs, run=Recorder(returncode=1), environ=environ)
+        assert str(fake) in str(error.value)
 
     def test_stale_message_names_the_generator_and_root_that_failed(self):
         docs = Path(tempfile.mkdtemp())
