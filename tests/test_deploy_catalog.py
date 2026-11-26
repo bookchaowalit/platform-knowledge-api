@@ -549,6 +549,7 @@ class MainTest(unittest.TestCase):
         docs = self.root / "architecture-docs"
         (docs / "data" / "indexes").mkdir(parents=True)
         write_catalog(docs / "data" / "indexes" / "document-catalog.json", "a.md")
+        (docs / ".git").mkdir()  # a checkout: its own (legacy) generator runs
         (docs / "scripts").mkdir()
         (docs / "scripts" / "document_catalog.py").write_text("# fixture\n")
         run = Recorder()
@@ -568,6 +569,7 @@ class MainTest(unittest.TestCase):
         docs = self.root / "architecture-docs"
         (docs / "data" / "indexes").mkdir(parents=True)
         write_catalog(docs / "data" / "indexes" / "document-catalog.json", "a.md")
+        (docs / ".git").mkdir()  # a checkout: its own (legacy) generator runs
         (docs / "scripts").mkdir()
         (docs / "scripts" / "document_catalog.py").write_text("# fixture\n")
         run = Recorder()
