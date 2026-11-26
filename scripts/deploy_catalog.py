@@ -156,12 +156,21 @@ def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) ->
 
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
     python, env = docs_env(environ)
+    # A relative interpreter path would be resolved again from the working folder.
+    if os.sep in python and not os.path.isabs(python):
+        python = str(Path(python).resolve())
     # Every path the subprocess gets is absolute.
     docs_root = docs_root.expanduser().resolve()
     snapshot = (docs_root / ".snapshot.json").is_file()
     # A store snapshot holds whatever was written to the store: never run code from it, and never
     # run with it as the working folder.
-    legacy = not snapshot and (docs_root / "scripts" / "document_catalog.py").is_file()
+    # Only a Git checkout (the reviewed source) may run its own in-tree generator; any other tree
+    # (a snapshot, even one without its stamp) gets the trusted tooling.
+    legacy = (
+        not snapshot
+        and (docs_root / ".git").exists()
+        and (docs_root / "scripts" / "document_catalog.py").is_file()
+    )
     if legacy:
         # Legacy layout: the generator still sits inside the document tree and runs there.
         workdir = docs_root
