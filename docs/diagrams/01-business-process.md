@@ -1,6 +1,8 @@
 # 01 — Business process (As-Is / To-Be)
 
-platform-knowledge-api เป็น service เดียวที่ทำสองงาน: (1) ให้ค้น **metadata** ของ document catalog (สร้างจาก architecture-docs แล้ว deploy แยก ไม่อยู่ใน git) และ (2) ตั้งแต่ 2026-11-03 เป็น **hosted document store** (SPEC-002) ที่เก็บตัวเอกสารพร้อม version history ใน Postgres
+platform-knowledge-api เป็น service เดียวที่ทำสองงาน: (1) ให้ค้น **metadata** ของ document catalog (สร้างจาก architecture-docs แล้ว deploy แยก ไม่อยู่ใน git) และ (2) ตั้งแต่ 2026-11-03 เป็น **hosted document store** (SPEC-002) ที่เก็บตัวเอกสารพร้อม version history ใน Postgres และตั้งแต่ SPEC-003 ทุก write ที่เพิ่ม version จะลง `store_outbox` ใน transaction เดียวกัน แล้ว relay ส่งเข้า Kafka `platform.events.v1`
+
+Last reviewed: 2026-11-26 · commit `d3be116`
 
 ## As-Is (จากโค้ดและ ops record วันนี้)
 
@@ -44,7 +46,18 @@ Sources: `specs/002-document-store/spec.md` §1, §2, ops record: hosted-documen
 
 หมายเหตุ: ops record ระบุว่า 2026-11-03 owner ตัดสินใจเพิ่มว่า architecture-docs ยังเป็น Git-first (one-way mirror) และ Knowledge Hub public pages ยังอยู่ใน Git ซึ่งขัดกับ phase 2/3 ใน SPEC-002
 
+## Gap
+
+| ID | As-Is → To-Be | Status | Owner | Evidence |
+|---|---|---|---|---|
+| G1 | knowledge-base content in Git → in the store, repo archived (phase 1) | done | claude | `specs/002-document-store/spec.md`, ops record: hosted-document-store (2026-11-03) |
+| G2 | other systems poll for changes → store events through an outbox to Kafka and Bronze | done | claude | `specs/003-event-outbox/spec.md` |
+| G3 | Knowledge Hub public pages from Git → read from the store (phase 2) | decide | owner | SPEC-002 §1 vs owner decision 2026-11-03 "architecture-docs stays Git-first" |
+| G4 | architecture-docs content and tooling in Git → in the store (phase 3) | decide | owner | SPEC-002 §1; architecture-docs is archived in the clone plan (2026-11-26) [ต้องยืนยัน] where its content lives now |
+| G5 | catalog deploy is manual → scheduled or CD | decide | owner | no written To-Be; `scripts/deploy_catalog.py` |
+
 ## Open questions
 
+- architecture-docs ถูก archive แล้ว (clone plan 2026-11-26) lane catalog และ store-mirror ยังรันอยู่หรือไม่ [ต้องยืนยัน]
 - SPEC-002 phase 2/3 ยังเป็นแผนอยู่หรือถูกแทนด้วยการตัดสินใจ 2026-11-03 ("architecture-docs stays Git-first")? spec ยังไม่ได้อัปเดต
 - Catalog lane ยังเป็น manual ทั้งหมด: จะมี schedule หรือ CD สำหรับ catalog หรือไม่
