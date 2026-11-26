@@ -10,8 +10,8 @@ Last reviewed: 2026-11-26 · commit `d3be116`
 flowchart TD
   subgraph CATALOG["Catalog lane: manual, not on CD"]
     A1["Owner edits architecture docs via platform-ops-cli task arch:pull / arch:push (store space architecture-docs)"] --> A2["store_sync pull: knowledge-base and architecture-docs snapshots"]
-    A2 --> A3["document_catalog.py --federated OUT.json (tooling now in platform-ops-cli architecture/) [ต้องยืนยัน]"]
-    A3 --> A4["deploy_catalog.py --dry-run: freshness check, validate, stage"]
+    A2 --> A3["platform-ops-cli architecture/scripts/document_catalog.py --federated OUT.json --source NAME=snapshot (one --source per space snapshot)"]
+    A3 --> A4["deploy_catalog.py --source OUT.json --dry-run: validate, stage (freshness check runs only without --source)"]
     A4 --> A5["deploy_catalog.py: railway up --ci --no-gitignore"]
     A5 --> A6{"/ready 200 and live revision = staged sha256?"}
     A6 -->|"yes"| A7["Catalog live for Solo Web /knowledge and MCP knowledge.search"]
@@ -20,7 +20,7 @@ flowchart TD
   subgraph STORE["Store lane: SPEC-002"]
     B1["Agent or owner via MCP knowledge.store.put"] --> B3["PUT /api/v1/store/document"]
     B2["platform-ops-cli diary writes diary/entries"] --> B3
-    B4["platform-ops-cli task arch:push (since 2026-11-26 cutover)"] --> B5["store_sync push with if_version then verify"]
+    B4["platform-ops-cli task arch:push (since 2026-11-26 cutover)"] --> B5["task check on the working copy, then store_sync commit of the pulled manifest with if_version"]
     B5 --> B3
     B3 --> B6[("Neon platform-knowledge: store_documents + store_versions")]
     B6 --> B7["Knowledge Hub /private reads spaces"]
@@ -29,7 +29,7 @@ flowchart TD
   B8 -.-> A2
 ```
 
-Sources: `README.md` (Deploy, Document store), `PRODUCT.md`, `scripts/deploy_catalog.py`, `scripts/store_sync.py`, `server.py`, `document_store.py`, `knowledge_mcp.py`, `specs/002-document-store/spec.md`, hub registry `repository-catalog/registries/capabilities.yaml` (architecture-docs row, hub commit `787b222`), ops record: knowledge-api-hosted (2026-11-03), ops record: hosted-document-store (2026-11-03)
+Sources: `README.md` (Deploy, Document store), `PRODUCT.md`, `scripts/deploy_catalog.py`, `scripts/store_sync.py`, platform-ops-cli `architecture/scripts/arch_store.py` and `architecture/scripts/document_catalog.py`, `server.py`, `document_store.py`, `knowledge_mcp.py`, `specs/002-document-store/spec.md`, hub registry `repository-catalog/registries/capabilities.yaml` (architecture-docs row, hub commit `787b222`), ops record: knowledge-api-hosted (2026-11-03), ops record: hosted-document-store (2026-11-03)
 
 ## To-Be (จาก specs/002-document-store/spec.md และ ops record เท่านั้น)
 
@@ -44,7 +44,7 @@ flowchart LR
 
 Sources: `specs/002-document-store/spec.md` §1, §2, ops record: hosted-document-store (2026-11-03)
 
-หมายเหตุ: ops record ระบุว่า 2026-11-03 owner ตัดสินใจเพิ่มว่า architecture-docs ยังเป็น Git-first (one-way mirror) และ Knowledge Hub public pages ยังอยู่ใน Git ซึ่งขัดกับ phase 2/3 ใน SPEC-002 การตัดสินใจนั้นถูกแทนแล้วด้วย cutover phase 3 วันที่ 2026-11-26 (G4)
+หมายเหตุ: ops record ระบุว่า 2026-11-03 owner ตัดสินใจเพิ่มว่า architecture-docs ยังเป็น Git-first (one-way mirror) และ Knowledge Hub public pages ยังอยู่ใน Git ซึ่งขัดกับ phase 2/3 ใน SPEC-002 ส่วนที่ว่า architecture-docs เป็น Git-first ถูกแทนแล้วด้วย cutover phase 3 วันที่ 2026-11-26 (G4) ส่วนหน้า public ของ Knowledge Hub ที่อยู่ใน Git ยังไม่มีหลักฐานว่าเปลี่ยน (G3)
 
 ## Gap
 
