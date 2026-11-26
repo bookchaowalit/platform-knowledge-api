@@ -144,13 +144,19 @@ def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) ->
 
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
     python, env = docs_env(environ)
-    # The hint names the interpreter the check really uses (found on the check's PATH, which leaves
-    # this repository's virtualenv out), not whatever python3 the caller's shell finds.
-    shown = (
-        shutil.which(python, path=env.get("PATH")) if os.sep not in python else None
-    ) or python
     # The subprocess runs in docs_root, so every path it gets must be absolute.
     docs_root = docs_root.expanduser().resolve()
+    # The hint names the interpreter the check really uses: found on the check's PATH (which
+    # leaves this repository's virtualenv out), with relative PATH entries taken from docs_root,
+    # where the subprocess runs - not whatever python3 the caller's shell finds.
+    search = os.pathsep.join(
+        part if os.path.isabs(part) else str(docs_root / part)
+        for part in env.get("PATH", "").split(os.pathsep)
+        if part
+    )
+    shown = (
+        shutil.which(python, path=search) if os.sep not in python else None
+    ) or python
     if (docs_root / "scripts" / "document_catalog.py").is_file():
         # Legacy layout: the generator still sits inside the document tree.
         command = [python, "scripts/document_catalog.py", "--check"]
