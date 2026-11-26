@@ -10,9 +10,9 @@ Last reviewed: 2026-11-26 · commit `d3be116`
 flowchart TD
   subgraph CATALOG["Catalog lane: manual, not on CD"]
     A1["Owner edits architecture docs via platform-ops-cli task arch:pull / arch:push (store space architecture-docs)"] --> A2["store_sync pull: knowledge-base and architecture-docs snapshots"]
-    A2 --> A3["platform-ops-cli architecture/scripts/document_catalog.py --federated OUT.json --source NAME=snapshot (one --source per space snapshot)"]
+    A2 --> A3["platform-ops-cli architecture/scripts/document_catalog.py run on the architecture-docs snapshot: --federated OUT.json --source knowledge-base=snapshot"]
     A3 --> A4["deploy_catalog.py --source OUT.json --dry-run: validate, stage (freshness check runs only without --source)"]
-    A4 --> A5["deploy_catalog.py: railway up --ci --no-gitignore"]
+    A4 --> A5["deploy_catalog.py --source OUT.json: railway up --ci --no-gitignore"]
     A5 --> A6{"/ready 200 and live revision = staged sha256?"}
     A6 -->|"yes"| A7["Catalog live for Solo Web /knowledge and MCP knowledge.search"]
     A6 -->|"no"| A8["DeployError, owner investigates"]
@@ -20,7 +20,7 @@ flowchart TD
   subgraph STORE["Store lane: SPEC-002"]
     B1["Agent or owner via MCP knowledge.store.put"] --> B3["PUT /api/v1/store/document"]
     B2["platform-ops-cli diary writes diary/entries"] --> B3
-    B4["platform-ops-cli task arch:push (since 2026-11-26 cutover)"] --> B5["task check on the working copy, then store_sync commit of the pulled manifest with if_version"]
+    B4["platform-ops-cli task arch:push (since 2026-11-26 cutover)"] --> B5["arch:push: count changes, credential scan, review when needed, task check, then store_sync commit of the pulled manifest with if_version"]
     B5 --> B3
     B3 --> B6[("Neon platform-knowledge: store_documents + store_versions")]
     B6 --> B7["Knowledge Hub /private reads spaces"]
