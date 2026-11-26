@@ -119,13 +119,13 @@ class FreshnessTest(unittest.TestCase):
                     str((tools / "scripts" / "document_catalog.py").resolve()),
                     "--check",
                 ],
-                str(docs.resolve()),
+                str(tools.resolve()),
             )
         ]
         assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str(docs.resolve())
 
     def test_relative_roots_are_made_absolute_before_the_subprocess(self):
-        # The subprocess runs with cwd=docs_root, so a relative path would be resolved twice.
+        # The subprocess runs with cwd=the tools folder (documents via SOLO_ARCHITECTURE_ROOT), so a relative path would be resolved twice.
         base = Path(tempfile.mkdtemp())
         (base / "docs").mkdir()
         (base / "tools" / "scripts").mkdir(parents=True)
@@ -143,7 +143,7 @@ class FreshnessTest(unittest.TestCase):
         assert command[1] == str(
             (base / "tools" / "scripts" / "document_catalog.py").resolve()
         )
-        assert cwd == str((base / "docs").resolve())
+        assert cwd == str((base / "tools").resolve())
         assert run.envs[0]["SOLO_ARCHITECTURE_ROOT"] == str((base / "docs").resolve())
 
     def test_default_tools_come_from_the_main_clone_of_a_linked_worktree(self):
@@ -248,7 +248,7 @@ class FreshnessTest(unittest.TestCase):
                     "SOLO_ARCHITECTURE_DOCS_PYTHON": ".venv/bin/python",
                 },
             )
-        assert f"cd {docs.resolve()} && " in str(error.value)
+        assert f"cd {tools.resolve()} && " in str(error.value)
 
     def test_unexpandable_tools_setting_is_a_deploy_error(self):
         with pytest.raises(deploy.DeployError, match="SOLO_ARCHITECTURE_TOOLS"):
@@ -274,13 +274,13 @@ class FreshnessTest(unittest.TestCase):
             deploy.check_fresh(docs, run=Recorder(returncode=1), environ=environ)
         assert str(fake) in str(error.value)
 
-    def test_hint_resolves_relative_path_entries_from_the_docs_root(self):
+    def test_hint_resolves_relative_path_entries_from_the_check_folder(self):
         docs = Path(tempfile.mkdtemp())
-        (docs / "bin").mkdir()
-        fake = docs / "bin" / "python3"
+        tools = Path(tempfile.mkdtemp())
+        (tools / "bin").mkdir()
+        fake = tools / "bin" / "python3"
         fake.write_text("#!/bin/sh\n")
         fake.chmod(0o755)
-        tools = Path(tempfile.mkdtemp())
         (tools / "scripts").mkdir()
         (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
         environ = {
