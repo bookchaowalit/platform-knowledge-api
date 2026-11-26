@@ -486,3 +486,174 @@ def test_pull_reuse_ignores_a_symlinked_reuse_folder(
     client.get = counting_get  # type: ignore[method-assign]
     store_sync.pull(client, SPACE, tmp_path / "second", reuse=link)
     assert fetched == ["a.md"]
+
+
+# SPEC-001 (architecture-docs) D3: a working copy with a manifest, committed with if_version.
+
+
+def working_copy(api: KnowledgeApi, tmp_path: Path, docs: dict[str, bytes]) -> Path:
+    import subprocess
+
+    client = client_for(api)
+    for path, body in docs.items():
+        client.put(SPACE, path, body, if_version=0)
+    copy = tmp_path / "copy"
+    manifest = tmp_path / "manifest.json"
+    assert store_sync.pull(client, SPACE, copy, manifest=manifest) == len(docs)
+    subprocess.run(["git", "init", "-q", str(copy)], check=True)
+    subprocess.run(["git", "-C", str(copy), "add", "-A", "-f"], check=True)
+    return copy
+
+
+def test_pull_records_versions_and_commit_writes_only_changes(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a", "b.md": b"b", "c.md": b"c"})
+    manifest = tmp_path / "manifest.json"
+    recorded = json.loads(manifest.read_text())
+    assert recorded["space"] == SPACE
+    assert recorded["documents"]["a.md"]["version"] == 1
+    assert oct(manifest.stat().st_mode & 0o777) == "0o600"
+
+    (copy / "a.md").write_bytes(b"a2")
+    (copy / "c.md").unlink()
+    (copy / "new").mkdir()
+    (copy / "new" / "d.md").write_bytes(b"d")
+    (copy / ".gitignore").write_text("*.swp\n")
+    (copy / "junk.swp").write_bytes(b"editor")
+    client = client_for(api)
+
+    dry = store_sync.commit(client, SPACE, copy, manifest, dry_run=True)
+    assert (dry.changed, dry.added, dry.deleted) == (
+        ["a.md"],
+        [".gitignore", "new/d.md"],
+        ["c.md"],
+    )
+    assert dry.written == []
+    assert client.list_all(SPACE)["a.md"]["version"] == 1
+
+    plan = store_sync.commit(client, SPACE, copy, manifest)
+    assert sorted(plan.written) == [".gitignore", "a.md", "c.md", "new/d.md"]
+    remote = client.list_all(SPACE)
+    assert remote["a.md"]["version"] == 2
+    assert remote["b.md"]["version"] == 1
+    assert "c.md" not in remote
+    assert "junk.swp" not in remote
+    # The manifest follows: a second commit has nothing to do.
+    again = store_sync.commit(client, SPACE, copy, manifest)
+    assert again.touched == []
+    assert again.written == []
+
+
+def test_commit_refuses_everything_when_one_document_changed_meanwhile(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a", "b.md": b"b"})
+    manifest = tmp_path / "manifest.json"
+    client = client_for(api)
+    client.put(SPACE, "b.md", b"someone else", if_version=1)  # a concurrent writer
+
+    (copy / "a.md").write_bytes(b"mine")
+    (copy / "b.md").write_bytes(b"mine too")
+    plan = store_sync.commit(client, SPACE, copy, manifest)
+    assert plan.conflicts == ["b.md"]
+    assert plan.written == []
+    assert client.get(SPACE, "a.md") == b"a"  # nothing written, not even the clean one
+    assert client.get(SPACE, "b.md") == b"someone else"
+
+
+def test_a_write_that_lands_between_check_and_put_is_refused_by_if_version(
+    api: KnowledgeApi, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a"})
+    manifest = tmp_path / "manifest.json"
+    client = client_for(api)
+    listed = client.list_all
+
+    def list_then_race(space: str, prefix: str = "") -> dict:
+        found = listed(space, prefix)
+        client_for(api).put(SPACE, "a.md", b"raced", if_version=1)
+        return found
+
+    monkeypatch.setattr(client, "list_all", list_then_race)
+    (copy / "a.md").write_bytes(b"mine")
+    plan = store_sync.commit(client, SPACE, copy, manifest)
+    assert plan.conflicts == ["a.md"]
+    assert plan.written == []
+    assert client.get(SPACE, "a.md") == b"raced"
+    assert store_sync.report_commit(plan, dry_run=False) == 1
+
+
+def test_commit_refuses_oversized_and_refused_paths_before_writing(
+    api: KnowledgeApi, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a"})
+    manifest = tmp_path / "manifest.json"
+    client = client_for(api)
+    monkeypatch.setattr(store_sync, "MAX_DOCUMENT_BYTES", 4)
+    (copy / "a.md").write_bytes(b"small")  # 5 bytes > the patched limit
+    (copy / "b.md").write_bytes(b"ok")
+    plan = store_sync.commit(client, SPACE, copy, manifest)
+    assert plan.too_large == ["a.md"]
+    assert plan.written == []
+    assert "b.md" not in client.list_all(SPACE)
+
+    monkeypatch.setattr(store_sync, "MAX_DOCUMENT_BYTES", 10 * 1024 * 1024)
+    (copy / "secret.pem").write_bytes(b"key")
+    plan = store_sync.commit(client, SPACE, copy, manifest)
+    assert plan.refused == ["secret.pem"]
+    assert plan.written == []
+    # A refused file is not mistaken for a deleted document either.
+    assert "a.md" not in plan.deleted
+
+
+def test_commit_needs_a_manifest_of_the_same_space(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a"})
+    client = client_for(api)
+    with pytest.raises(store_sync.SyncError, match="manifest"):
+        store_sync.commit(client, "other", copy, tmp_path / "manifest.json")
+    with pytest.raises(store_sync.SyncError, match="pull a working copy"):
+        store_sync.commit(client, SPACE, copy, tmp_path / "missing.json")
+
+
+def test_revert_writes_an_old_version_back_as_the_newest(api: KnowledgeApi) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a.md", b"one", if_version=0)
+    client.put(SPACE, "a.md", b"two", if_version=1)
+    assert store_sync.revert(client, SPACE, "a.md", 1) == 3
+    assert client.get(SPACE, "a.md") == b"one"
+    client.delete(SPACE, "a.md", if_version=3)
+    assert (
+        store_sync.revert(client, SPACE, "a.md", 2) == 5
+    )  # a deleted document comes back
+    assert client.get(SPACE, "a.md") == b"two"
+
+
+def test_the_cli_commits_and_reverts(
+    api: KnowledgeApi,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a"})
+    monkeypatch.setattr(store_sync, "connect", lambda: client_for(api))
+    args = [
+        "commit",
+        "--root",
+        str(copy),
+        "--manifest",
+        str(tmp_path / "manifest.json"),
+    ]
+    assert store_sync.main(args) == 0
+    assert "nothing to commit" in capsys.readouterr().out
+    (copy / "a.md").write_bytes(b"a2")
+    assert store_sync.main([*args, "--dry-run"]) == 0
+    assert "dry run: 1 documents would be written" in capsys.readouterr().out
+    assert store_sync.main(args) == 0
+    assert "written 1 of 1" in capsys.readouterr().out
+    assert store_sync.main(["revert", "--path", "a.md", "--version", "1"]) == 0
+    assert "as version 3" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        store_sync.main(["commit", "--root", str(copy)])
