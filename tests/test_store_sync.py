@@ -465,3 +465,24 @@ def test_pull_reuse_never_reads_a_file_whose_size_differs(
     with unittest.mock.patch.object(Path, "read_bytes", tracking):
         store_sync.pull(client, SPACE, tmp_path / "second", reuse=first)
     assert first / "a.md" not in read
+
+
+def test_pull_reuse_ignores_a_symlinked_reuse_folder(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a.md", b"truth", if_version=0)
+    real = tmp_path / "real"
+    store_sync.pull(client, SPACE, real)
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    fetched: list[str] = []
+    get = client.get
+
+    def counting_get(space: str, path: str, version: int | None = None) -> bytes:
+        fetched.append(path)
+        return get(space, path, version=version)
+
+    client.get = counting_get  # type: ignore[method-assign]
+    store_sync.pull(client, SPACE, tmp_path / "second", reuse=link)
+    assert fetched == ["a.md"]

@@ -345,6 +345,8 @@ def _reusable(
         return None
     try:
         check_path(path)
+        if reuse.is_symlink():
+            return None
         candidate = reuse
         for part in Path(path).parts:
             candidate = candidate / part
@@ -353,7 +355,12 @@ def _reusable(
         info = candidate.lstat()
         if not candidate.is_file() or (size is not None and info.st_size != size):
             return None
-        data = candidate.read_bytes()
+        # Never more than the listed size (+1 to notice growth after the lstat).
+        limit = size if size is not None else info.st_size
+        with candidate.open("rb") as handle:
+            data = handle.read(limit + 1)
+        if len(data) != limit:
+            return None
     except (OSError, RuntimeError, StoreError, SyncError):
         return None
     return data if hashlib.sha256(data).hexdigest() == sha256 else None
