@@ -420,3 +420,48 @@ def test_pull_reuse_never_trusts_a_tampered_earlier_file(
     second = tmp_path / "second"
     store_sync.pull(client, SPACE, second, reuse=first)
     assert (second / "a.md").read_bytes() == b"truth"
+
+
+def test_pull_reuse_skips_symlinks_loops_and_oversized_files(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a.md", b"truth", if_version=0)
+    client.put(SPACE, "b.md", b"bee", if_version=0)
+    client.put(SPACE, "c.md", b"sea", if_version=0)
+    first = tmp_path / "first"
+    store_sync.pull(client, SPACE, first)
+    (first / "a.md").unlink()
+    (first / "a.md").symlink_to(first / "a.md")  # a loop
+    outside = tmp_path / "outside.md"
+    outside.write_bytes(b"bee")
+    (first / "b.md").unlink()
+    (first / "b.md").symlink_to(outside)  # same bytes, but a symlink: not trusted
+    (first / "c.md").write_bytes(b"x" * 1024)  # larger than the listed size: never read
+    second = tmp_path / "second"
+    assert store_sync.pull(client, SPACE, second, reuse=first) == 3
+    assert (second / "a.md").read_bytes() == b"truth"
+    assert (second / "b.md").read_bytes() == b"bee"
+    assert (second / "c.md").read_bytes() == b"sea"
+
+
+def test_pull_reuse_never_reads_a_file_whose_size_differs(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a.md", b"small", if_version=0)
+    first = tmp_path / "first"
+    store_sync.pull(client, SPACE, first)
+    (first / "a.md").write_bytes(b"x" * 4096)
+    read: list[Path] = []
+    original = Path.read_bytes
+
+    def tracking(self: Path) -> bytes:
+        read.append(self)
+        return original(self)
+
+    import unittest.mock
+
+    with unittest.mock.patch.object(Path, "read_bytes", tracking):
+        store_sync.pull(client, SPACE, tmp_path / "second", reuse=first)
+    assert first / "a.md" not in read

@@ -332,16 +332,29 @@ def consistent_listing(
     raise SyncError("the store kept changing during listing; try again")
 
 
-def _reusable(reuse: Path | None, path: str, sha256: str | None) -> bytes | None:
-    """The bytes of ``path`` in an earlier snapshot when their SHA-256 matches the listing."""
+def _reusable(
+    reuse: Path | None, path: str, sha256: str | None, size: int | None = None
+) -> bytes | None:
+    """The bytes of ``path`` in an earlier snapshot when their SHA-256 matches the listing.
+
+    Anything unusual means "fetch it": a symlink anywhere on the path (checked before any
+    resolve, so a loop never raises), a size other than the listed one (checked before reading,
+    so a huge file is never loaded), or any error.
+    """
     if reuse is None or not sha256:
         return None
     try:
-        earlier = safe_target(reuse, path)
-        if earlier.is_symlink() or not earlier.is_file():
+        check_path(path)
+        candidate = reuse
+        for part in Path(path).parts:
+            candidate = candidate / part
+            if candidate.is_symlink():
+                return None
+        info = candidate.lstat()
+        if not candidate.is_file() or (size is not None and info.st_size != size):
             return None
-        data = earlier.read_bytes()
-    except (OSError, SyncError):
+        data = candidate.read_bytes()
+    except (OSError, RuntimeError, StoreError, SyncError):
         return None
     return data if hashlib.sha256(data).hexdigest() == sha256 else None
 
@@ -373,7 +386,13 @@ def pull(
         with os.fdopen(fd, "wb") as handle:
             # The version from the listing: the snapshot is one consistent point in time
             # even if documents change while it is being pulled.
-            data = _reusable(reuse, path, remote[path].get("sha256"))
+            listed_size = remote[path].get("size")
+            data = _reusable(
+                reuse,
+                path,
+                remote[path].get("sha256"),
+                int(listed_size) if listed_size is not None else None,
+            )
             if data is None:
                 data = client.get(space, path, version=int(remote[path]["version"]))
             handle.write(data)

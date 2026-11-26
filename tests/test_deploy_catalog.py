@@ -274,6 +274,24 @@ class FreshnessTest(unittest.TestCase):
             deploy.check_fresh(docs, run=Recorder(returncode=1), environ=environ)
         assert str(fake) in str(error.value)
 
+    def test_hint_resolves_relative_path_entries_from_the_docs_root(self):
+        docs = Path(tempfile.mkdtemp())
+        (docs / "bin").mkdir()
+        fake = docs / "bin" / "python3"
+        fake.write_text("#!/bin/sh\n")
+        fake.chmod(0o755)
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        environ = {
+            "SOLO_ARCHITECTURE_TOOLS": str(tools),
+            "SOLO_ARCHITECTURE_DOCS_PYTHON": "python3",
+            "PATH": "bin:/nonexistent",
+        }
+        with pytest.raises(deploy.DeployError) as error:
+            deploy.check_fresh(docs, run=Recorder(returncode=1), environ=environ)
+        assert str(fake.resolve()) in str(error.value)
+
     def test_stale_message_names_the_generator_and_root_that_failed(self):
         docs = Path(tempfile.mkdtemp())
         tools = Path(tempfile.mkdtemp())
