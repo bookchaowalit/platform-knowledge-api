@@ -657,3 +657,58 @@ def test_the_cli_commits_and_reverts(
     assert "as version 3" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         store_sync.main(["commit", "--root", str(copy)])
+
+
+def test_commit_refuses_a_root_other_than_the_pulled_working_copy(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a", "sub/b.md": b"b"})
+    client = client_for(api)
+    with pytest.raises(store_sync.SyncError, match="not the working copy"):
+        # From sub/ every document outside it would look deleted.
+        store_sync.commit(client, SPACE, copy / "sub", tmp_path / "manifest.json")
+    assert sorted(client.list_all(SPACE)) == ["a.md", "sub/b.md"]
+
+
+def test_the_manifest_never_lives_among_the_documents(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a.md", b"a", if_version=0)
+    copy = tmp_path / "copy"
+    with pytest.raises(store_sync.SyncError, match="outside the working copy"):
+        store_sync.pull(client, SPACE, copy, manifest=copy / "manifest.json")
+    assert store_sync.pull(client, SPACE, copy, manifest=copy / ".git" / "m.json") == 1
+
+
+def test_an_added_path_that_clashes_with_a_remaining_document_writes_nothing(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    copy = working_copy(api, tmp_path, {"docs/a.md": b"a"})
+    client = client_for(api)
+    client.put(SPACE, "docs/b.md", b"someone else's", if_version=0)  # after the pull
+    (copy / "docs" / "a.md").unlink()
+    (copy / "docs").rmdir()
+    (copy / "docs").write_bytes(b"now a file")
+    plan = store_sync.commit(client, SPACE, copy, tmp_path / "manifest.json")
+    assert plan.conflicts == ["docs"]
+    assert plan.written == []
+    assert client.get(SPACE, "docs/a.md") == b"a"  # the delete never ran
+
+
+def test_an_oversized_file_is_reported_without_being_read(
+    api: KnowledgeApi, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a"})
+    monkeypatch.setattr(store_sync, "MAX_DOCUMENT_BYTES", 4)
+    (copy / "big.bin").write_bytes(b"0123456789")
+    read = Path.read_bytes
+
+    def guarded(self: Path) -> bytes:
+        assert self.name != "big.bin", "an oversized file was read"
+        return read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", guarded)
+    plan = store_sync.commit(client_for(api), SPACE, copy, tmp_path / "manifest.json")
+    assert plan.too_large == ["big.bin"]
+    assert plan.written == []

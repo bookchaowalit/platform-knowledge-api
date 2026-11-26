@@ -30,8 +30,10 @@ import contextlib
 import hashlib
 import json
 import os
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
@@ -47,6 +49,7 @@ from document_store import (  # noqa: E402 - after the repo root is on sys.path
     MAX_DOCUMENT_BYTES,
     StoreError,
     check_path,
+    parent_paths,
 )
 
 
@@ -396,6 +399,8 @@ def pull(
     whose bytes there still match the listed SHA-256 is copied instead of fetched."""
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise SyncError("pull needs a new or empty --out directory")
+    if manifest is not None:
+        check_manifest_place(manifest, out)
     # The snapshot holds private documents: owner-only directories and files.
     out.mkdir(mode=0o700, parents=True, exist_ok=True)
     out.chmod(0o700)
@@ -426,36 +431,55 @@ def pull(
                 data = client.get(space, path, version=int(remote[path]["version"]))
             handle.write(data)
     if manifest is not None:
-        write_manifest(manifest, space, remote)
+        write_manifest(manifest, space, remote, root=out)
     return len(remote)
 
 
 MANIFEST_SCHEMA = 1
 
 
+def check_manifest_place(manifest: Path, root: Path) -> None:
+    """The manifest is metadata, not a document: outside the working copy or in its .git."""
+    place = manifest.expanduser().absolute().resolve()
+    tree = root.expanduser().absolute().resolve()
+    if place.is_relative_to(tree) and not place.is_relative_to(tree / ".git"):
+        raise SyncError(
+            "the manifest must live outside the working copy (or in its .git)"
+        )
+
+
 def write_manifest(
-    file: Path, space: str, documents: dict[str, dict[str, Any]]
+    file: Path, space: str, documents: dict[str, dict[str, Any]], *, root: Path
 ) -> None:
-    """Record the version and SHA-256 each document had when it was pulled (owner-only file,
-    replaced atomically so a crash never leaves half a manifest)."""
+    """Record the version and SHA-256 each document had when it was pulled, and which working
+    copy they belong to (owner-only file from mkstemp, replaced atomically)."""
     payload = {
         "schema": MANIFEST_SCHEMA,
         "space": space,
+        "root": str(root.expanduser().absolute().resolve()),
         "documents": {
             path: {"version": int(meta["version"]), "sha256": str(meta["sha256"])}
             for path, meta in sorted(documents.items())
         },
     }
     file.parent.mkdir(parents=True, exist_ok=True)
-    temporary = file.with_name(f".{file.name}.{os.getpid()}.tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=1, sort_keys=True)
-        handle.write("\n")
-    os.replace(temporary, file)
+    fd, temporary = tempfile.mkstemp(
+        dir=file.parent, prefix=f".{file.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=1, sort_keys=True)
+            handle.write("\n")
+        os.replace(temporary, file)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
 
 
-def read_manifest(file: Path, space: str) -> dict[str, dict[str, Any]]:
+def read_manifest(
+    file: Path, space: str, root: Path | None = None
+) -> dict[str, dict[str, Any]]:
     try:
         payload = json.loads(file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -466,6 +490,11 @@ def read_manifest(file: Path, space: str) -> dict[str, dict[str, Any]]:
         raise SyncError(
             f"the manifest is not a schema {MANIFEST_SCHEMA} manifest of space {space}"
         )
+    if root is not None and payload.get("root") != str(
+        root.expanduser().absolute().resolve()
+    ):
+        # A sub-folder or another copy would make every document outside it look deleted.
+        raise SyncError("--root is not the working copy this manifest was pulled into")
     documents: dict[str, dict[str, Any]] = payload["documents"]
     return documents
 
@@ -516,11 +545,26 @@ def plan_commit(
     root: Path, candidates: Iterable[str], base: dict[str, dict[str, Any]]
 ) -> tuple[CommitPlan, dict[str, LocalFile]]:
     candidates = list(candidates)
-    files = {local.path: local for local in collect(root, paths=candidates)}
     plan = CommitPlan()
+    # Over the limit: reported, never read (a stray multi-GiB file must not be hashed).
+    oversized = set()
+    for path in candidates:
+        with contextlib.suppress(OSError):
+            info = (root / path).lstat()
+            if stat.S_ISREG(info.st_mode) and info.st_size > MAX_DOCUMENT_BYTES:
+                oversized.add(path)
+    plan.too_large = sorted(oversized)
+    files = {
+        local.path: local
+        for local in collect(root, paths=[p for p in candidates if p not in oversized])
+    }
     for path in candidates:
         source = root / path
-        if path not in files and (source.is_file() or source.is_symlink()):
+        if (
+            path not in files
+            and path not in oversized
+            and (source.is_file() or source.is_symlink())
+        ):
             plan.refused.append(path)
     for path, local in files.items():
         meta = base.get(path)
@@ -528,15 +572,10 @@ def plan_commit(
             plan.added.append(path)
         elif meta["sha256"] != local.sha256:
             plan.changed.append(path)
-        if (
-            meta is None or meta["sha256"] != local.sha256
-        ) and local.source.stat().st_size > MAX_DOCUMENT_BYTES:
-            plan.too_large.append(path)
-    plan.deleted = sorted(set(base) - set(files) - set(plan.refused))
+    plan.deleted = sorted(set(base) - set(files) - set(plan.refused) - oversized)
     plan.changed.sort()
     plan.added.sort()
     plan.refused.sort()
-    plan.too_large.sort()
     return plan, files
 
 
@@ -555,7 +594,8 @@ def commit(
     any touched document's current version differs from the manifest (someone else wrote it).
     Each write still carries ``if_version``, so a change that lands between the check and the
     write is refused too. The manifest follows every successful write."""
-    base = read_manifest(manifest, space)
+    base = read_manifest(manifest, space, root)
+    check_manifest_place(manifest, root)
     root = root.resolve()
     plan, files = plan_commit(
         root, worktree_files(root) if candidates is None else candidates, base
@@ -568,6 +608,16 @@ def commit(
         expected = base.get(path)
         current_version = int(current["version"]) if current else 0
         if current_version != (int(expected["version"]) if expected else 0):
+            plan.conflicts.append(path)
+    # After the deletes, an added path must not be a folder of a remaining document (a.md/x)
+    # nor sit where remaining documents are below it: the store would refuse it only after
+    # the deletes had run.
+    remaining = set(remote) - set(plan.deleted)
+    for path in plan.added:
+        parents = parent_paths(path)
+        if any(parent in remaining for parent in parents) or any(
+            other.startswith(path + "/") for other in remaining
+        ):
             plan.conflicts.append(path)
     if plan.conflicts or dry_run:
         return plan
@@ -607,7 +657,7 @@ def commit(
             }
             plan.written.append(path)
     finally:
-        write_manifest(manifest, space, base)
+        write_manifest(manifest, space, base, root=root)
     return plan
 
 

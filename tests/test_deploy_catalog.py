@@ -79,6 +79,11 @@ class StageTest(unittest.TestCase):
             deploy.stage(self.source, self.dest)
 
 
+LEGACY = {
+    "SOLO_ARCHITECTURE_DOCS_IN_TREE": "1"
+}  # opt-in for an old checkout's own generator
+
+
 def _legacy_docs() -> Path:
     """A document checkout that still carries its own scripts/ (before SPEC-001 phase 1)."""
     docs = Path(tempfile.mkdtemp())
@@ -92,7 +97,7 @@ class FreshnessTest(unittest.TestCase):
     def test_runs_generator_check_in_docs_root(self):
         docs = _legacy_docs()
         run = Recorder()
-        env = {"SOLO_ARCHITECTURE_DOCS_PYTHON": "/opt/py/bin/python3"}
+        env = {**LEGACY, "SOLO_ARCHITECTURE_DOCS_PYTHON": "/opt/py/bin/python3"}
         deploy.check_fresh(docs, run=run, environ=env)
         assert run.calls == [
             (
@@ -391,7 +396,11 @@ class FreshnessTest(unittest.TestCase):
         deploy.check_fresh(
             _legacy_docs(),
             run=run,
-            environ={"PATH": venv_bin + ":/usr/bin:/bin", "VIRTUAL_ENV": sys.prefix},
+            environ={
+                **LEGACY,
+                "PATH": venv_bin + ":/usr/bin:/bin",
+                "VIRTUAL_ENV": sys.prefix,
+            },
         )
         assert run.envs[0]["PATH"].split(":")[0] != venv_bin
         assert "VIRTUAL_ENV" not in run.envs[0]
@@ -399,7 +408,52 @@ class FreshnessTest(unittest.TestCase):
 
     def test_stale_generator_output_aborts(self):
         with pytest.raises(deploy.DeployError):
-            deploy.check_fresh(_legacy_docs(), run=Recorder(returncode=1), environ={})
+            deploy.check_fresh(
+                _legacy_docs(), run=Recorder(returncode=1), environ=LEGACY
+            )
+
+
+def test_a_store_working_copy_never_runs_its_in_tree_generator():
+    docs = _legacy_docs()  # a git repository with scripts/document_catalog.py ...
+    (docs / ".git" / "store-manifest.json").write_text("{}")  # ... made by arch:pull
+    tools = Path(tempfile.mkdtemp())
+    (tools / "scripts").mkdir()
+    (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+    run = Recorder()
+    deploy.check_fresh(
+        docs, run=run, environ={**LEGACY, "SOLO_ARCHITECTURE_TOOLS": str(tools)}
+    )
+    assert run.calls[0][0][1] == str(
+        (tools / "scripts" / "document_catalog.py").resolve()
+    )
+    # Without the opt-in even a plain old checkout gets the trusted tooling.
+    plain = _legacy_docs()
+    run = Recorder()
+    deploy.check_fresh(plain, run=run, environ={"SOLO_ARCHITECTURE_TOOLS": str(tools)})
+    assert run.calls[0][0][1] == str(
+        (tools / "scripts" / "document_catalog.py").resolve()
+    )
+
+
+def test_a_relative_interpreter_keeps_its_venv_symlink(tmp_path, monkeypatch):
+    real = tmp_path / "real-python"
+    real.write_text("")
+    (tmp_path / "venv" / "bin").mkdir(parents=True)
+    (tmp_path / "venv" / "bin" / "python").symlink_to(real)
+    monkeypatch.chdir(tmp_path)
+    tools = tmp_path / "tools"
+    (tools / "scripts").mkdir(parents=True)
+    (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+    run = Recorder()
+    deploy.check_fresh(
+        _legacy_docs(),
+        run=run,
+        environ={
+            "SOLO_ARCHITECTURE_DOCS_PYTHON": "venv/bin/python",
+            "SOLO_ARCHITECTURE_TOOLS": str(tools),
+        },
+    )
+    assert run.calls[0][0][0] == str(tmp_path / "venv" / "bin" / "python")
 
 
 class RailwayTest(unittest.TestCase):
@@ -560,7 +614,7 @@ class MainTest(unittest.TestCase):
             fetch=lambda u, token=None: (200, {}),
             token=lambda: "t",
             sleep=lambda _s: None,
-            environ={"SOLO_ARCHITECTURE_DOCS_ROOT": str(docs)},
+            environ={**LEGACY, "SOLO_ARCHITECTURE_DOCS_ROOT": str(docs)},
         )
         assert code == 0
         assert run.calls[0][1] == str(docs.resolve())
@@ -581,7 +635,10 @@ class MainTest(unittest.TestCase):
                 fetch=lambda u, token=None: (200, {}),
                 token=lambda: "t",
                 sleep=lambda _s: None,
-                environ={"SOLO_ARCHITECTURE_DOCS_ROOT": "~/architecture-docs"},
+                environ={
+                    **LEGACY,
+                    "SOLO_ARCHITECTURE_DOCS_ROOT": "~/architecture-docs",
+                },
             )
         assert code == 0
         assert run.calls[0][1] == str(docs.resolve())

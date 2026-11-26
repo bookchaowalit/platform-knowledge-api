@@ -156,18 +156,23 @@ def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) ->
 
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
     python, env = docs_env(environ)
-    # A relative interpreter path would be resolved again from the working folder.
+    # A relative interpreter path would be resolved again from the working folder. Absolute, but
+    # not resolved: a venv's bin/python is a symlink, and resolving it would leave the venv.
     if os.sep in python and not os.path.isabs(python):
-        python = str(Path(python).resolve())
+        python = os.path.abspath(python)
     # Every path the subprocess gets is absolute.
     docs_root = docs_root.expanduser().resolve()
     snapshot = (docs_root / ".snapshot.json").is_file()
     # A store snapshot holds whatever was written to the store: never run code from it, and never
     # run with it as the working folder.
-    # Only a Git checkout (the reviewed source) may run its own in-tree generator; any other tree
-    # (a snapshot, even one without its stamp) gets the trusted tooling.
+    # Since SPEC-001 phase 1 no document tree carries its generator, and after the phase 3 cutover a
+    # Git repository can be a store working copy (arch:pull), so a .git folder proves nothing: the
+    # in-tree generator of an old checkout runs only when asked for (SOLO_ARCHITECTURE_DOCS_IN_TREE=1);
+    # every other tree gets the trusted tooling.
     legacy = (
-        not snapshot
+        environ.get("SOLO_ARCHITECTURE_DOCS_IN_TREE", "").strip() == "1"
+        and not snapshot
+        and not (docs_root / ".git" / "store-manifest.json").exists()
         and (docs_root / ".git").exists()
         and (docs_root / "scripts" / "document_catalog.py").is_file()
     )
