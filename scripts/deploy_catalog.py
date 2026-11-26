@@ -206,16 +206,20 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
         # A store snapshot is read-only (the generators refuse to write into it): regenerate in an
         # architecture-docs checkout and let store-mirror publish it, then refresh the snapshot.
         hint = (
-            "regenerate in an architecture-docs checkout (task docs:catalog), push to main so "
-            "store-mirror publishes it, then refresh the snapshot "
+            "regenerate in a store working copy (platform-ops-cli: task arch:pull TASK=catalog, "
+            "SOLO_ARCHITECTURE_ROOT=<copy> PYTHONNOUSERSITE=1 task arch:docs:catalog, task arch:push "
+            "DIR=<copy>), then refresh the snapshot "
             "(knowledge_snapshot.py --space architecture-docs --refresh)"
         )
     else:
         root_env = (
             "" if legacy else f"SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} "
         )
+        # The same dependency view as the check (no user site-packages), or the write could pick
+        # another YAML parser and the check would call the fresh output stale again.
         hint = (
-            f"regenerate it with `cd {shlex.quote(str(workdir))} && {root_env}"
+            f"regenerate it with `cd {shlex.quote(str(workdir))} && env -u PYTHONPATH "
+            f"PYTHONNOUSERSITE=1 {root_env}"
             f"{shlex.quote(shown)} {shlex.quote(str(generator))} --write` first"
         )
     result = run(command, cwd=workdir, env=env)

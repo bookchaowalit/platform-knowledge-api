@@ -176,10 +176,20 @@ class StoreClient:
             after = page["documents"][-1]["path"]
 
     def get(self, space: str, path: str, *, version: int | None = None) -> bytes:
+        return self.get_document(space, path, version=version)[0]
+
+    def get_document(
+        self, space: str, path: str, *, version: int | None = None
+    ) -> tuple[bytes, dict[str, Any]]:
+        """(content, metadata) of one version."""
         params: dict[str, Any] = {"space": space, "path": path}
         if version is not None:
             params["version"] = version
         document = self._call("GET", "/api/v1/store/document", params)["document"]
+        return self._content(document), document
+
+    @staticmethod
+    def _content(document: dict[str, Any]) -> bytes:
         if document["encoding"] == "utf-8":
             return str(document["content"]).encode("utf-8")
         return base64.b64decode(document["content_base64"])
@@ -193,13 +203,21 @@ class StoreClient:
         )
 
     def put(
-        self, space: str, path: str, content: bytes, *, if_version: int | None
+        self,
+        space: str,
+        path: str,
+        content: bytes,
+        *,
+        if_version: int | None,
+        media_type: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "content_base64": base64.b64encode(content).decode("ascii")
         }
         if if_version is not None:
             body["if_version"] = if_version
+        if media_type:
+            body["media_type"] = media_type
         return self._call(
             "PUT",
             "/api/v1/store/document",
@@ -431,7 +449,7 @@ def pull(
                 data = client.get(space, path, version=int(remote[path]["version"]))
             handle.write(data)
     if manifest is not None:
-        write_manifest(manifest, space, remote, root=out)
+        write_manifest(manifest, space, remote, root=out, store=store_identity(client))
     return len(remote)
 
 
@@ -448,8 +466,19 @@ def check_manifest_place(manifest: Path, root: Path) -> None:
         )
 
 
+def store_identity(client: StoreClient) -> str:
+    """Which store a manifest belongs to (its API base URL), so versions from one store are never
+    used as if_version against another."""
+    return str(getattr(client.http, "base_url", "")).rstrip("/")
+
+
 def write_manifest(
-    file: Path, space: str, documents: dict[str, dict[str, Any]], *, root: Path
+    file: Path,
+    space: str,
+    documents: dict[str, dict[str, Any]],
+    *,
+    root: Path,
+    store: str = "",
 ) -> None:
     """Record the version and SHA-256 each document had when it was pulled, and which working
     copy they belong to (owner-only file from mkstemp, replaced atomically)."""
@@ -457,6 +486,7 @@ def write_manifest(
         "schema": MANIFEST_SCHEMA,
         "space": space,
         "root": str(root.expanduser().absolute().resolve()),
+        "store": store,
         "documents": {
             path: {"version": int(meta["version"]), "sha256": str(meta["sha256"])}
             for path, meta in sorted(documents.items())
@@ -478,7 +508,7 @@ def write_manifest(
 
 
 def read_manifest(
-    file: Path, space: str, root: Path | None = None
+    file: Path, space: str, root: Path | None = None, store: str | None = None
 ) -> dict[str, dict[str, Any]]:
     try:
         payload = json.loads(file.read_text(encoding="utf-8"))
@@ -495,13 +525,29 @@ def read_manifest(
     ):
         # A sub-folder or another copy would make every document outside it look deleted.
         raise SyncError("--root is not the working copy this manifest was pulled into")
+    if store is not None and payload.get("store") != store:
+        raise SyncError(
+            "this manifest was pulled from another store (EMPIRE_KNOWLEDGE_API)"
+        )
     documents: dict[str, dict[str, Any]] = payload["documents"]
     return documents
 
 
 def worktree_files(root: Path) -> list[str]:
     """Files git would track in a working copy: tracked (also when deleted) plus untracked
-    files that are not ignored, so editor and build leftovers stay out of the store."""
+    files that are not ignored, so editor and build leftovers stay out of the store. The root
+    must be its own git top level: inside another repository (or none) git would answer for a
+    different tree, and every document would look deleted."""
+    top = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if top.returncode != 0 or Path(top.stdout.strip()).resolve() != root.resolve():
+        raise SyncError(
+            "--root is not the top of its own git repository; commit from an arch:pull working copy"
+        )
     result = subprocess.run(
         [
             "git",
@@ -527,6 +573,7 @@ class CommitPlan:
     refused: list[str] = field(
         default_factory=list
     )  # local files the store would refuse
+    drifted: list[str] = field(default_factory=list)  # not what the caller froze
     too_large: list[str] = field(default_factory=list)
     conflicts: list[str] = field(default_factory=list)
     written: list[str] = field(default_factory=list)
@@ -538,7 +585,7 @@ class CommitPlan:
 
     @property
     def blocked(self) -> bool:
-        return bool(self.refused or self.too_large or self.conflicts)
+        return bool(self.refused or self.too_large or self.conflicts or self.drifted)
 
 
 def plan_commit(
@@ -586,6 +633,7 @@ def commit(
     manifest: Path,
     *,
     candidates: Iterable[str] | None = None,
+    expected: dict[str, str] | None = None,
     dry_run: bool = False,
 ) -> CommitPlan:
     """Write a working copy's changes since its manifest (SPEC-001 D3, R3 and R5).
@@ -593,13 +641,28 @@ def commit(
     Nothing is written when a local file would be refused or is over the size limit, or when
     any touched document's current version differs from the manifest (someone else wrote it).
     Each write still carries ``if_version``, so a change that lands between the check and the
-    write is refused too. The manifest follows every successful write."""
-    base = read_manifest(manifest, space, root)
+    write is refused too, and the first refused write stops the rest. The manifest follows
+    every successful write.
+
+    ``expected`` ({path: sha256}) freezes the tree: only these files are considered, every one
+    must still have that SHA-256, and the bytes uploaded are the bytes hashed, so what is
+    written is exactly what the caller scanned, reviewed and checked."""
+    base = read_manifest(manifest, space, root, store_identity(client))
     check_manifest_place(manifest, root)
     root = root.resolve()
+    if expected is not None:
+        candidates = sorted(expected)
     plan, files = plan_commit(
         root, worktree_files(root) if candidates is None else candidates, base
     )
+    if expected is not None:
+        plan.drifted = sorted(
+            path for path, local in files.items() if local.sha256 != expected[path]
+        ) + sorted(
+            path
+            for path in expected
+            if path not in files and path not in plan.too_large
+        )
     if not plan.touched or plan.blocked:
         return plan
     remote = client.list_all(space)
@@ -630,6 +693,7 @@ def commit(
                 plan.written.append(path)
             except SyncError as exc:
                 (plan.conflicts if exc.status == 409 else plan.failed).append(path)
+                return plan  # stop: no partial edit beyond what already landed
         for path in [*plan.changed, *plan.added]:
             local = files[path]
             try:
@@ -638,7 +702,7 @@ def commit(
                 body = None
             if body is None or hashlib.sha256(body).hexdigest() != local.sha256:
                 plan.failed.append(path)  # changed while being written; push again
-                continue
+                return plan
             expected = base.get(path)
             try:
                 result = client.put(
@@ -649,7 +713,7 @@ def commit(
                 )
             except SyncError as exc:
                 (plan.conflicts if exc.status == 409 else plan.failed).append(path)
-                continue
+                return plan
             meta = result["document"]
             base[path] = {
                 "version": int(meta["version"]),
@@ -657,7 +721,7 @@ def commit(
             }
             plan.written.append(path)
     finally:
-        write_manifest(manifest, space, base, root=root)
+        write_manifest(manifest, space, base, root=root, store=store_identity(client))
     return plan
 
 
@@ -665,10 +729,14 @@ def revert(client: StoreClient, space: str, path: str, version: int) -> int:
     """Write version ``version`` of ``path`` back as its newest version; returns that version.
     The store keeps every version, so this replaces ``git revert`` for one document."""
     check_path(path)
-    old = client.get(space, path, version=version)
+    old, meta = client.get_document(space, path, version=version)
     current = client.list_all(space, prefix=path).get(path)
     result = client.put(
-        space, path, old, if_version=int(current["version"]) if current else 0
+        space,
+        path,
+        old,
+        if_version=int(current["version"]) if current else 0,
+        media_type=meta.get("media_type"),
     )
     return int(result["document"]["version"])
 
@@ -697,6 +765,7 @@ def report_commit(plan: CommitPlan, *, dry_run: bool) -> int:
         ("added", plan.added),
         ("deleted", plan.deleted),
         ("refused path", plan.refused),
+        ("changed since frozen", plan.drifted),
         ("too large", plan.too_large),
         ("conflict", plan.conflicts),
         ("failed", plan.failed),
@@ -746,6 +815,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--dry-run", action="store_true", help="commit: report, write nothing"
     )
+    parser.add_argument(
+        "--files-from",
+        type=Path,
+        help="commit: JSON {path: sha256}, the frozen set to write (nothing else)",
+    )
     parser.add_argument("--path", help="revert: the document")
     parser.add_argument("--version", type=int, help="revert: the version to restore")
     parser.add_argument(
@@ -779,6 +853,9 @@ def main(argv: list[str] | None = None) -> int:
                     args.space,
                     args.root,
                     args.manifest,
+                    expected=json.loads(args.files_from.read_text(encoding="utf-8"))
+                    if args.files_from
+                    else None,
                     dry_run=args.dry_run,
                 ),
                 dry_run=args.dry_run,

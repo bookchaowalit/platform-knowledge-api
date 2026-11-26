@@ -712,3 +712,82 @@ def test_an_oversized_file_is_reported_without_being_read(
     plan = store_sync.commit(client_for(api), SPACE, copy, tmp_path / "manifest.json")
     assert plan.too_large == ["big.bin"]
     assert plan.written == []
+
+
+def test_a_frozen_set_writes_only_those_files_with_those_bytes(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    import hashlib
+
+    copy = working_copy(api, tmp_path, {"a.md": b"a", "b.md": b"b"})
+    client = client_for(api)
+    manifest = tmp_path / "manifest.json"
+    (copy / "a.md").write_bytes(b"reviewed")
+    frozen = {
+        "a.md": hashlib.sha256(b"reviewed").hexdigest(),
+        "b.md": hashlib.sha256(b"b").hexdigest(),
+    }
+    (copy / "a.md").write_bytes(b"edited after the review")
+    (copy / "extra.md").write_bytes(b"never reviewed")
+    plan = store_sync.commit(client, SPACE, copy, manifest, expected=frozen)
+    assert plan.drifted == ["a.md"]
+    assert plan.written == []
+    (copy / "a.md").write_bytes(b"reviewed")
+    plan = store_sync.commit(client, SPACE, copy, manifest, expected=frozen)
+    assert plan.written == ["a.md"]
+    assert "extra.md" not in client.list_all(SPACE)  # outside the frozen set
+
+
+def test_commit_needs_the_root_to_be_its_own_git_repository(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a.md", b"a", if_version=0)
+    copy = tmp_path / "plain"
+    store_sync.pull(client, SPACE, copy, manifest=tmp_path / "m.json")  # no git init
+    with pytest.raises(store_sync.SyncError, match="top of its own git repository"):
+        store_sync.commit(client, SPACE, copy, tmp_path / "m.json")
+    assert "a.md" in client.list_all(SPACE)
+
+
+def test_the_first_refused_write_stops_the_rest(
+    api: KnowledgeApi, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a", "b.md": b"b"})
+    client = client_for(api)
+    listed = client.list_all
+
+    def list_then_race(space: str, prefix: str = "") -> dict:
+        found = listed(space, prefix)
+        client_for(api).put(SPACE, "a.md", b"raced", if_version=1)
+        return found
+
+    monkeypatch.setattr(client, "list_all", list_then_race)
+    (copy / "a.md").write_bytes(b"mine")
+    (copy / "b.md").write_bytes(b"mine too")
+    plan = store_sync.commit(client, SPACE, copy, tmp_path / "manifest.json")
+    assert plan.conflicts == ["a.md"]
+    assert plan.written == []
+    assert client.get(SPACE, "b.md") == b"b"  # never reached
+
+
+def test_a_manifest_from_another_store_is_refused(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    copy = working_copy(api, tmp_path, {"a.md": b"a"})
+    other = client_for(api)
+    other.http.base_url = "https://staging.test"
+    (copy / "a.md").write_bytes(b"x")
+    with pytest.raises(store_sync.SyncError, match="another store"):
+        store_sync.commit(other, SPACE, copy, tmp_path / "manifest.json")
+
+
+def test_revert_keeps_the_media_type_of_the_restored_version(
+    api: KnowledgeApi,
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "notes", b"# one", if_version=0, media_type="text/markdown")
+    client.put(SPACE, "notes", b"# two", if_version=1, media_type="text/markdown")
+    store_sync.revert(client, SPACE, "notes", 1)
+    _body, meta = client.get_document(SPACE, "notes")
+    assert meta["media_type"] == "text/markdown"
