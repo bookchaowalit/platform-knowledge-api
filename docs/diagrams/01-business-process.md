@@ -10,7 +10,7 @@ Last reviewed: 2026-11-26 · commit `d3be116`
 flowchart TD
   subgraph CATALOG["Catalog lane: manual, not on CD"]
     A1["Owner edits architecture docs via platform-ops-cli task arch:pull / arch:push (store space architecture-docs)"] --> A2["store_sync pull: knowledge-base and architecture-docs snapshots"]
-    A2 --> A3["platform-ops-cli architecture/scripts/document_catalog.py run on the architecture-docs snapshot: --federated OUT.json --source knowledge-base=snapshot"]
+    A2 --> A3["platform-ops-cli architecture/scripts/document_catalog.py with SOLO_ARCHITECTURE_SNAPSHOT (or SOLO_ARCHITECTURE_ROOT) set to the architecture-docs snapshot just pulled: --federated OUT.json --source knowledge-base=snapshot just pulled"]
     A3 --> A4["deploy_catalog.py --source OUT.json --dry-run: validate, stage (freshness check runs only without --source)"]
     A4 --> A5["deploy_catalog.py --source OUT.json: railway up --ci --no-gitignore"]
     A5 --> A6{"/ready 200 and live revision = staged sha256?"}
@@ -52,7 +52,7 @@ Sources: `specs/002-document-store/spec.md` §1, §2, ops record: hosted-documen
 |---|---|---|---|---|
 | G1 | knowledge-base content in Git → in the store, repo archived (phase 1) | done | claude | `specs/002-document-store/spec.md`, ops record: hosted-document-store (2026-11-03) |
 | G2 | other systems poll for changes → store events through an outbox to Kafka and Bronze | done | claude | `specs/003-event-outbox/spec.md` |
-| G3 | Knowledge Hub public pages from Git → read from the store (phase 2) | decide | owner | SPEC-002 §1 vs owner decision 2026-11-03 "architecture-docs stays Git-first" |
+| G3 | Knowledge Hub public pages from Git → read from the store (phase 2) | decide | owner | SPEC-002 §1; ops record: hosted-document-store (2026-11-03, owner kept Knowledge Hub public pages in Git) |
 | G4 | architecture-docs content and tooling in Git → content in store space `architecture-docs`, tooling in `platform-ops-cli` (phase 3) | done | claude | hub registry `capabilities.yaml` architecture-docs row, hub commit `787b222` (cutover 2026-11-26; Git repo read-only at `263ebe9`) |
 | G5 | catalog deploy is manual → scheduled or CD | decide | owner | no written To-Be; `scripts/deploy_catalog.py` |
 
