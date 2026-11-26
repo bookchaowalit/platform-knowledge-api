@@ -80,8 +80,9 @@ class StageTest(unittest.TestCase):
 
 
 def _legacy_docs() -> Path:
-    """A document tree that still carries its own scripts/ (before SPEC-001 phase 1)."""
+    """A document checkout that still carries its own scripts/ (before SPEC-001 phase 1)."""
     docs = Path(tempfile.mkdtemp())
+    (docs / ".git").mkdir()
     (docs / "scripts").mkdir()
     (docs / "scripts" / "document_catalog.py").write_text("# fixture\n")
     return docs
@@ -311,6 +312,21 @@ class FreshnessTest(unittest.TestCase):
         assert "PYTHONPATH" not in env
         assert "PYTHONSTARTUP" not in env
         assert env["PYTHONSAFEPATH"] == "1"
+
+    def test_a_tree_without_git_never_runs_its_own_generator(self):
+        docs = Path(tempfile.mkdtemp())  # no .git, no stamp: not a reviewed checkout
+        (docs / "scripts").mkdir()
+        (docs / "scripts" / "document_catalog.py").write_text("# untrusted\n")
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        run = Recorder()
+        deploy.check_fresh(
+            docs, run=run, environ={"SOLO_ARCHITECTURE_TOOLS": str(tools)}
+        )
+        assert run.calls[0][0][1] == str(
+            (tools / "scripts" / "document_catalog.py").resolve()
+        )
 
     def test_a_generator_inside_a_snapshot_is_never_run(self):
         docs = _legacy_docs()
