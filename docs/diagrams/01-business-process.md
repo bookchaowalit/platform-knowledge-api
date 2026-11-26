@@ -10,7 +10,7 @@ Last reviewed: 2026-11-26 · commit `d3be116`
 flowchart TD
   subgraph CATALOG["Catalog lane: manual, not on CD"]
     A1["Owner edits architecture docs via platform-ops-cli task arch:pull / arch:push (store space architecture-docs)"] --> A2["store_sync pull: knowledge-base and architecture-docs snapshots"]
-    A2 --> A3["platform-ops-cli architecture/scripts/document_catalog.py with SOLO_ARCHITECTURE_SNAPSHOT (or SOLO_ARCHITECTURE_ROOT) set to the architecture-docs snapshot just pulled: --federated OUT.json --source knowledge-base=snapshot just pulled"]
+    A2 --> A3["platform-ops-cli architecture/scripts/document_catalog.py with SOLO_ARCHITECTURE_ROOT set to the folder store_sync pull just wrote (SOLO_ARCHITECTURE_SNAPSHOT only for a knowledge_snapshot.py --refresh snapshot, which carries .snapshot.json): --federated OUT.json --source knowledge-base=snapshot just pulled"]
     A3 --> A4["deploy_catalog.py --source OUT.json --dry-run: validate, stage (freshness check runs only without --source)"]
     A4 --> A5["deploy_catalog.py --source OUT.json: railway up --ci --no-gitignore"]
     A5 --> A6{"/ready 200 and live revision = staged sha256?"}
