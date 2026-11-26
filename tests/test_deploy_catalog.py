@@ -292,6 +292,20 @@ class FreshnessTest(unittest.TestCase):
             deploy.check_fresh(docs, run=Recorder(returncode=1), environ=environ)
         assert str(fake.resolve()) in str(error.value)
 
+    def test_a_generator_inside_a_snapshot_is_never_run(self):
+        docs = _legacy_docs()
+        (docs / ".snapshot.json").write_text("{}")
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        run = Recorder()
+        deploy.check_fresh(
+            docs, run=run, environ={"SOLO_ARCHITECTURE_TOOLS": str(tools)}
+        )
+        assert run.calls[0][0][1] == str(
+            (tools / "scripts" / "document_catalog.py").resolve()
+        )
+
     def test_stale_snapshot_points_at_the_checkout_not_a_write(self):
         docs = Path(tempfile.mkdtemp())
         (docs / ".snapshot.json").write_text("{}")

@@ -161,7 +161,9 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
     shown = (
         shutil.which(python, path=search) if os.sep not in python else None
     ) or python
-    if (docs_root / "scripts" / "document_catalog.py").is_file():
+    snapshot = (docs_root / ".snapshot.json").is_file()
+    # A store snapshot holds whatever was written to the store: never run code from it.
+    if not snapshot and (docs_root / "scripts" / "document_catalog.py").is_file():
         # Legacy layout: the generator still sits inside the document tree.
         command = [python, "scripts/document_catalog.py", "--check"]
         regenerate = f"cd {shlex.quote(str(docs_root))} && {shlex.quote(shown)} scripts/document_catalog.py --write"
@@ -180,7 +182,7 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
             f"cd {shlex.quote(str(docs_root))} && SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} "
             f"{shlex.quote(shown)} {shlex.quote(str(generator))} --write"
         )
-    if (docs_root / ".snapshot.json").is_file():
+    if snapshot:
         # A store snapshot is read-only (the generators refuse to write into it): regenerate in an
         # architecture-docs checkout and let store-mirror publish it, then refresh the snapshot.
         regenerate = (
