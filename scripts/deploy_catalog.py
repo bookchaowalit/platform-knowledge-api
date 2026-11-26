@@ -156,29 +156,16 @@ def architecture_tools(environ: Mapping[str, str], *, repo_root: Path = ROOT) ->
 
 def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> None:
     python, env = docs_env(environ)
-    # The subprocess runs in docs_root, so every path it gets must be absolute.
+    # Every path the subprocess gets is absolute.
     docs_root = docs_root.expanduser().resolve()
-    # The hint names the interpreter the check really uses: found on the check's PATH (which
-    # leaves this repository's virtualenv out), with relative PATH entries taken from docs_root,
-    # where the subprocess runs - not whatever python3 the caller's shell finds.
-    # An empty PATH entry means the working folder on POSIX, i.e. docs_root for the check.
-    search = os.pathsep.join(
-        part
-        if os.path.isabs(part)
-        else str(docs_root / part)
-        if part
-        else str(docs_root)
-        for part in env.get("PATH", "").split(os.pathsep)
-    )
-    shown = (
-        shutil.which(python, path=search) if os.sep not in python else None
-    ) or python
     snapshot = (docs_root / ".snapshot.json").is_file()
-    # A store snapshot holds whatever was written to the store: never run code from it.
-    if not snapshot and (docs_root / "scripts" / "document_catalog.py").is_file():
-        # Legacy layout: the generator still sits inside the document tree.
-        command = [python, "scripts/document_catalog.py", "--check"]
-        regenerate = f"cd {shlex.quote(str(docs_root))} && {shlex.quote(shown)} scripts/document_catalog.py --write"
+    # A store snapshot holds whatever was written to the store: never run code from it, and never
+    # run with it as the working folder.
+    legacy = not snapshot and (docs_root / "scripts" / "document_catalog.py").is_file()
+    if legacy:
+        # Legacy layout: the generator still sits inside the document tree and runs there.
+        workdir = docs_root
+        generator = Path("scripts/document_catalog.py")
     else:
         generator = (
             architecture_tools(environ) / "scripts" / "document_catalog.py"
@@ -187,26 +174,39 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
             raise DeployError(
                 "catalog generator not found: set SOLO_ARCHITECTURE_TOOLS to platform-ops-cli/architecture"
             )
-        command = [python, str(generator), "--check"]
+        # The trusted tooling folder; the documents come from SOLO_ARCHITECTURE_ROOT.
+        workdir = generator.parent.parent
         env["SOLO_ARCHITECTURE_ROOT"] = str(docs_root)
-        # Same folder as the check, so a relative SOLO_ARCHITECTURE_DOCS_PYTHON means the same interpreter.
-        regenerate = (
-            f"cd {shlex.quote(str(docs_root))} && SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} "
-            f"{shlex.quote(shown)} {shlex.quote(str(generator))} --write"
-        )
+    # The hint names the interpreter the check really uses: found on the check's PATH (which
+    # leaves this repository's virtualenv out), relative and empty PATH entries taken from the
+    # folder the check runs in - not whatever python3 the caller's shell finds.
+    search = os.pathsep.join(
+        part if os.path.isabs(part) else str(workdir / part) if part else str(workdir)
+        for part in env.get("PATH", "").split(os.pathsep)
+    )
+    shown = (
+        shutil.which(python, path=search) if os.sep not in python else None
+    ) or python
+    command = [python, str(generator), "--check"]
     if snapshot:
         # A store snapshot is read-only (the generators refuse to write into it): regenerate in an
         # architecture-docs checkout and let store-mirror publish it, then refresh the snapshot.
-        regenerate = (
+        hint = (
             "regenerate in an architecture-docs checkout (task docs:catalog), push to main so "
             "store-mirror publishes it, then refresh the snapshot "
             "(knowledge_snapshot.py --space architecture-docs --refresh)"
         )
-    result = run(command, cwd=docs_root, env=env)
-    if result.returncode != 0:
-        raise DeployError(
-            f"catalog is stale: {regenerate if regenerate.startswith('regenerate in') else f'regenerate it with `{regenerate}` first'}"
+    else:
+        root_env = (
+            "" if legacy else f"SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} "
         )
+        hint = (
+            f"regenerate it with `cd {shlex.quote(str(workdir))} && {root_env}"
+            f"{shlex.quote(shown)} {shlex.quote(str(generator))} --write` first"
+        )
+    result = run(command, cwd=workdir, env=env)
+    if result.returncode != 0:
+        raise DeployError(f"catalog is stale: {hint}")
 
 
 def stage(source: Path, dest: Path) -> Staged:
