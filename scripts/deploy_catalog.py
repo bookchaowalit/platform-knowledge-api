@@ -149,10 +149,14 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
     # The hint names the interpreter the check really uses: found on the check's PATH (which
     # leaves this repository's virtualenv out), with relative PATH entries taken from docs_root,
     # where the subprocess runs - not whatever python3 the caller's shell finds.
+    # An empty PATH entry means the working folder on POSIX, i.e. docs_root for the check.
     search = os.pathsep.join(
-        part if os.path.isabs(part) else str(docs_root / part)
-        for part in env.get("PATH", "").split(os.pathsep)
+        part
+        if os.path.isabs(part)
+        else str(docs_root / part)
         if part
+        else str(docs_root)
+        for part in env.get("PATH", "").split(os.pathsep)
     )
     shown = (
         shutil.which(python, path=search) if os.sep not in python else None
@@ -176,9 +180,19 @@ def check_fresh(docs_root: Path, *, run: Run, environ: Mapping[str, str]) -> Non
             f"cd {shlex.quote(str(docs_root))} && SOLO_ARCHITECTURE_ROOT={shlex.quote(str(docs_root))} "
             f"{shlex.quote(shown)} {shlex.quote(str(generator))} --write"
         )
+    if (docs_root / ".snapshot.json").is_file():
+        # A store snapshot is read-only (the generators refuse to write into it): regenerate in an
+        # architecture-docs checkout and let store-mirror publish it, then refresh the snapshot.
+        regenerate = (
+            "regenerate in an architecture-docs checkout (task docs:catalog), push to main so "
+            "store-mirror publishes it, then refresh the snapshot "
+            "(knowledge_snapshot.py --space architecture-docs --refresh)"
+        )
     result = run(command, cwd=docs_root, env=env)
     if result.returncode != 0:
-        raise DeployError(f"catalog is stale: regenerate it with `{regenerate}` first")
+        raise DeployError(
+            f"catalog is stale: {regenerate if regenerate.startswith('regenerate in') else f'regenerate it with `{regenerate}` first'}"
+        )
 
 
 def stage(source: Path, dest: Path) -> Staged:

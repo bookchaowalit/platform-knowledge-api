@@ -292,6 +292,21 @@ class FreshnessTest(unittest.TestCase):
             deploy.check_fresh(docs, run=Recorder(returncode=1), environ=environ)
         assert str(fake.resolve()) in str(error.value)
 
+    def test_stale_snapshot_points_at_the_checkout_not_a_write(self):
+        docs = Path(tempfile.mkdtemp())
+        (docs / ".snapshot.json").write_text("{}")
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        with pytest.raises(deploy.DeployError) as error:
+            deploy.check_fresh(
+                docs,
+                run=Recorder(returncode=1),
+                environ={"SOLO_ARCHITECTURE_TOOLS": str(tools)},
+            )
+        assert "--write" not in str(error.value)
+        assert "refresh the snapshot" in str(error.value)
+
     def test_stale_message_names_the_generator_and_root_that_failed(self):
         docs = Path(tempfile.mkdtemp())
         tools = Path(tempfile.mkdtemp())
