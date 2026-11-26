@@ -3,12 +3,19 @@
 
     uv run python scripts/store_sync.py push   --space knowledge-base --root DIR [--include diary/entries]
     uv run python scripts/store_sync.py verify --space knowledge-base --root DIR [--include diary/entries]
-    uv run python scripts/store_sync.py pull   --space knowledge-base --out DIR
+    uv run python scripts/store_sync.py pull   --space knowledge-base --out DIR [--manifest FILE]
+    uv run python scripts/store_sync.py commit --space architecture-docs --root DIR --manifest FILE [--dry-run]
+    uv run python scripts/store_sync.py revert --space architecture-docs --path PATH --version N
 
 ``push`` uploads Git-tracked files of DIR (plus every file under each ``--include``
 directory, for git-ignored content such as private diary entries) and skips files whose
 sha256 already matches. ``verify`` proves parity: missing, different and extra paths.
-``pull`` writes a read-only snapshot, for example for the catalog generator.
+``pull`` writes a read-only snapshot, for example for the catalog generator; with
+``--manifest`` it also records each document's version, which makes the snapshot a working copy.
+``commit`` writes only what changed in such a working copy (Git-visible files of DIR) since that
+manifest, each with the recorded version as ``if_version``: a document someone else changed in the
+meantime is refused, never overwritten, and nothing is written when any document conflicts or is
+too large. ``revert`` writes an old version of one document back as a new version.
 
 Tokens are minted like the knowledge MCP's (``EMPIRE_KNOWLEDGE_API``,
 ``SOLO_WEB_PUBLIC_ORIGIN`` and the owner key files); nothing secret is printed, and no
@@ -21,6 +28,7 @@ import argparse
 import base64
 import contextlib
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -35,11 +43,17 @@ import httpx
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from document_store import StoreError, check_path  # noqa: E402 - after the repo root is on sys.path
+from document_store import (  # noqa: E402 - after the repo root is on sys.path
+    MAX_DOCUMENT_BYTES,
+    StoreError,
+    check_path,
+)
 
 
 class SyncError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 @dataclass(frozen=True)
@@ -134,7 +148,10 @@ class StoreClient:
             code = ""
             with contextlib.suppress(ValueError, KeyError, TypeError):
                 code = str(response.json()["error"]["code"])
-            raise SyncError(f"store API answered {response.status_code} {code}".strip())
+            raise SyncError(
+                f"store API answered {response.status_code} {code}".strip(),
+                status=response.status_code,
+            )
         result: dict[str, Any] = response.json()
         return result
 
@@ -367,7 +384,12 @@ def _reusable(
 
 
 def pull(
-    client: StoreClient, space: str, out: Path, *, reuse: Path | None = None
+    client: StoreClient,
+    space: str,
+    out: Path,
+    *,
+    reuse: Path | None = None,
+    manifest: Path | None = None,
 ) -> int:
     """Write a fresh snapshot. out must be new or empty, so no file deleted in the
     store can linger from an earlier pull. With ``reuse`` (an earlier snapshot), a document
@@ -403,7 +425,202 @@ def pull(
             if data is None:
                 data = client.get(space, path, version=int(remote[path]["version"]))
             handle.write(data)
+    if manifest is not None:
+        write_manifest(manifest, space, remote)
     return len(remote)
+
+
+MANIFEST_SCHEMA = 1
+
+
+def write_manifest(
+    file: Path, space: str, documents: dict[str, dict[str, Any]]
+) -> None:
+    """Record the version and SHA-256 each document had when it was pulled (owner-only file,
+    replaced atomically so a crash never leaves half a manifest)."""
+    payload = {
+        "schema": MANIFEST_SCHEMA,
+        "space": space,
+        "documents": {
+            path: {"version": int(meta["version"]), "sha256": str(meta["sha256"])}
+            for path, meta in sorted(documents.items())
+        },
+    }
+    file.parent.mkdir(parents=True, exist_ok=True)
+    temporary = file.with_name(f".{file.name}.{os.getpid()}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=1, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary, file)
+
+
+def read_manifest(file: Path, space: str) -> dict[str, dict[str, Any]]:
+    try:
+        payload = json.loads(file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise SyncError(
+            f"no readable manifest at {file}; pull a working copy first"
+        ) from None
+    if payload.get("schema") != MANIFEST_SCHEMA or payload.get("space") != space:
+        raise SyncError(
+            f"the manifest is not a schema {MANIFEST_SCHEMA} manifest of space {space}"
+        )
+    documents: dict[str, dict[str, Any]] = payload["documents"]
+    return documents
+
+
+def worktree_files(root: Path) -> list[str]:
+    """Files git would track in a working copy: tracked (also when deleted) plus untracked
+    files that are not ignored, so editor and build leftovers stay out of the store."""
+    result = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(root),
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return sorted({p for p in result.stdout.decode("utf-8").split("\0") if p})
+
+
+@dataclass
+class CommitPlan:
+    changed: list[str] = field(default_factory=list)
+    added: list[str] = field(default_factory=list)
+    deleted: list[str] = field(default_factory=list)
+    refused: list[str] = field(
+        default_factory=list
+    )  # local files the store would refuse
+    too_large: list[str] = field(default_factory=list)
+    conflicts: list[str] = field(default_factory=list)
+    written: list[str] = field(default_factory=list)
+    failed: list[str] = field(default_factory=list)
+
+    @property
+    def touched(self) -> list[str]:
+        return sorted([*self.changed, *self.added, *self.deleted])
+
+    @property
+    def blocked(self) -> bool:
+        return bool(self.refused or self.too_large or self.conflicts)
+
+
+def plan_commit(
+    root: Path, candidates: Iterable[str], base: dict[str, dict[str, Any]]
+) -> tuple[CommitPlan, dict[str, LocalFile]]:
+    candidates = list(candidates)
+    files = {local.path: local for local in collect(root, paths=candidates)}
+    plan = CommitPlan()
+    for path in candidates:
+        source = root / path
+        if path not in files and (source.is_file() or source.is_symlink()):
+            plan.refused.append(path)
+    for path, local in files.items():
+        meta = base.get(path)
+        if meta is None:
+            plan.added.append(path)
+        elif meta["sha256"] != local.sha256:
+            plan.changed.append(path)
+        if (
+            meta is None or meta["sha256"] != local.sha256
+        ) and local.source.stat().st_size > MAX_DOCUMENT_BYTES:
+            plan.too_large.append(path)
+    plan.deleted = sorted(set(base) - set(files) - set(plan.refused))
+    plan.changed.sort()
+    plan.added.sort()
+    plan.refused.sort()
+    plan.too_large.sort()
+    return plan, files
+
+
+def commit(
+    client: StoreClient,
+    space: str,
+    root: Path,
+    manifest: Path,
+    *,
+    candidates: Iterable[str] | None = None,
+    dry_run: bool = False,
+) -> CommitPlan:
+    """Write a working copy's changes since its manifest (SPEC-001 D3, R3 and R5).
+
+    Nothing is written when a local file would be refused or is over the size limit, or when
+    any touched document's current version differs from the manifest (someone else wrote it).
+    Each write still carries ``if_version``, so a change that lands between the check and the
+    write is refused too. The manifest follows every successful write."""
+    base = read_manifest(manifest, space)
+    root = root.resolve()
+    plan, files = plan_commit(
+        root, worktree_files(root) if candidates is None else candidates, base
+    )
+    if not plan.touched or plan.blocked:
+        return plan
+    remote = client.list_all(space)
+    for path in plan.touched:
+        current = remote.get(path)
+        expected = base.get(path)
+        current_version = int(current["version"]) if current else 0
+        if current_version != (int(expected["version"]) if expected else 0):
+            plan.conflicts.append(path)
+    if plan.conflicts or dry_run:
+        return plan
+    try:
+        # Deletes first: a document that became a folder frees its name for the new paths.
+        for path in plan.deleted:
+            try:
+                client.delete(space, path, if_version=int(base[path]["version"]))
+                del base[path]
+                plan.written.append(path)
+            except SyncError as exc:
+                (plan.conflicts if exc.status == 409 else plan.failed).append(path)
+        for path in [*plan.changed, *plan.added]:
+            local = files[path]
+            try:
+                body = local.source.read_bytes()
+            except OSError:
+                body = None
+            if body is None or hashlib.sha256(body).hexdigest() != local.sha256:
+                plan.failed.append(path)  # changed while being written; push again
+                continue
+            expected = base.get(path)
+            try:
+                result = client.put(
+                    space,
+                    path,
+                    body,
+                    if_version=int(expected["version"]) if expected else 0,
+                )
+            except SyncError as exc:
+                (plan.conflicts if exc.status == 409 else plan.failed).append(path)
+                continue
+            meta = result["document"]
+            base[path] = {
+                "version": int(meta["version"]),
+                "sha256": str(meta["sha256"]),
+            }
+            plan.written.append(path)
+    finally:
+        write_manifest(manifest, space, base)
+    return plan
+
+
+def revert(client: StoreClient, space: str, path: str, version: int) -> int:
+    """Write version ``version`` of ``path`` back as its newest version; returns that version.
+    The store keeps every version, so this replaces ``git revert`` for one document."""
+    check_path(path)
+    old = client.get(space, path, version=version)
+    current = client.list_all(space, prefix=path).get(path)
+    result = client.put(
+        space, path, old, if_version=int(current["version"]) if current else 0
+    )
+    return int(result["document"]["version"])
 
 
 def connect() -> StoreClient:
@@ -422,9 +639,41 @@ def connect() -> StoreClient:
     )
 
 
+def report_commit(plan: CommitPlan, *, dry_run: bool) -> int:
+    """Print the plan (paths only, never content). 0 = done or nothing to do, 1 = refused
+    before writing (conflict, size, refused path), 3 = some writes failed after others."""
+    for label, paths in (
+        ("changed", plan.changed),
+        ("added", plan.added),
+        ("deleted", plan.deleted),
+        ("refused path", plan.refused),
+        ("too large", plan.too_large),
+        ("conflict", plan.conflicts),
+        ("failed", plan.failed),
+    ):
+        for path in paths:
+            print(f"  {label}: {path}")
+    if not plan.touched and not plan.blocked:
+        print("nothing to commit")
+        return 0
+    if plan.blocked and not plan.written:
+        print(f"refused: nothing written ({len(plan.touched)} documents touched)")
+        return 1
+    if dry_run:
+        print(f"dry run: {len(plan.touched)} documents would be written")
+        return 0
+    print(
+        f"written {len(plan.written)} of {len(plan.touched)} "
+        f"(changed {len(plan.changed)}, added {len(plan.added)}, deleted {len(plan.deleted)})"
+    )
+    return 0 if len(plan.written) == len(plan.touched) else 3
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Sync documents with the hosted store")
-    parser.add_argument("command", choices=["push", "verify", "pull"])
+    parser.add_argument(
+        "command", choices=["push", "verify", "pull", "commit", "revert"]
+    )
     parser.add_argument("--space", default="knowledge-base")
     parser.add_argument("--root", type=Path, help="source directory (push, verify)")
     parser.add_argument(
@@ -440,6 +689,16 @@ def main(argv: list[str] | None = None) -> int:
         help="earlier snapshot: copy documents whose SHA-256 still matches (pull)",
     )
     parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="pull: record document versions here; commit: the working copy's manifest",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="commit: report, write nothing"
+    )
+    parser.add_argument("--path", help="revert: the document")
+    parser.add_argument("--version", type=int, help="revert: the version to restore")
+    parser.add_argument(
         "--prune",
         action="store_true",
         help="push: delete store documents that are not in the source (a mirror)",
@@ -450,10 +709,30 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "pull":
             if not args.out:
                 parser.error("pull needs --out")
-            print(
-                f"pulled {pull(client, args.space, args.out, reuse=args.reuse)} documents"
+            count = pull(
+                client, args.space, args.out, reuse=args.reuse, manifest=args.manifest
             )
+            print(f"pulled {count} documents")
             return 0
+        if args.command == "revert":
+            if not args.path or args.version is None:
+                parser.error("revert needs --path and --version")
+            new = revert(client, args.space, args.path, args.version)
+            print(f"reverted {args.path} to version {args.version} as version {new}")
+            return 0
+        if args.command == "commit":
+            if not args.root or not args.manifest:
+                parser.error("commit needs --root and --manifest")
+            return report_commit(
+                commit(
+                    client,
+                    args.space,
+                    args.root,
+                    args.manifest,
+                    dry_run=args.dry_run,
+                ),
+                dry_run=args.dry_run,
+            )
         if not args.root:
             parser.error(f"{args.command} needs --root")
         root = args.root.resolve()
