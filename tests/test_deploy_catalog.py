@@ -292,6 +292,26 @@ class FreshnessTest(unittest.TestCase):
             deploy.check_fresh(docs, run=Recorder(returncode=1), environ=environ)
         assert str(fake.resolve()) in str(error.value)
 
+    def test_the_generator_gets_no_inherited_import_path(self):
+        docs = Path(tempfile.mkdtemp())
+        tools = Path(tempfile.mkdtemp())
+        (tools / "scripts").mkdir()
+        (tools / "scripts" / "document_catalog.py").write_text("# fixture\n")
+        run = Recorder()
+        deploy.check_fresh(
+            docs,
+            run=run,
+            environ={
+                "SOLO_ARCHITECTURE_TOOLS": str(tools),
+                "PYTHONPATH": "lib",
+                "PYTHONSTARTUP": "x.py",
+            },
+        )
+        env = run.envs[0]
+        assert "PYTHONPATH" not in env
+        assert "PYTHONSTARTUP" not in env
+        assert env["PYTHONSAFEPATH"] == "1"
+
     def test_a_generator_inside_a_snapshot_is_never_run(self):
         docs = _legacy_docs()
         (docs / ".snapshot.json").write_text("{}")

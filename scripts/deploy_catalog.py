@@ -93,7 +93,19 @@ def docs_env(environ: Mapping[str, str]) -> tuple[str, dict[str, str]]:
     repository's virtualenv (``uv run`` puts it first on PATH).
     """
     venv_bin = str(Path(sys.prefix) / "bin")
-    env = {k: v for k, v in environ.items() if k != "VIRTUAL_ENV"}
+    # The generator runs in docs_root, which may be a store snapshot: no inherited import path
+    # (a relative PYTHONPATH would import modules from the snapshot), and no implicit cwd/script
+    # directory on sys.path (PYTHONSAFEPATH, Python 3.11+).
+    dropped = {
+        "VIRTUAL_ENV",
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "PYTHONSTARTUP",
+        "PYTHONUSERBASE",
+    }
+    env = {k: v for k, v in environ.items() if k not in dropped}
+    env["PYTHONSAFEPATH"] = "1"
+    env["PYTHONNOUSERSITE"] = "1"
     env["PATH"] = os.pathsep.join(
         part for part in environ.get("PATH", "").split(os.pathsep) if part != venv_bin
     )
