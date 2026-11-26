@@ -378,3 +378,45 @@ def test_a_rate_limit_that_never_lifts_is_reported(api: KnowledgeApi) -> None:
     ):
         client.list_all(SPACE)
     assert len(waits) == store_sync.MAX_RATE_RETRIES
+
+
+def test_pull_reuses_unchanged_files_from_an_earlier_snapshot(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a.md", b"same", if_version=0)
+    client.put(SPACE, "b.md", b"old", if_version=0)
+    first = tmp_path / "first"
+    assert store_sync.pull(client, SPACE, first) == 2
+    client.put(SPACE, "b.md", b"new", if_version=1)
+    client.put(SPACE, "c.md", b"added", if_version=0)
+    (first / "a.md").chmod(0o600)
+
+    fetched: list[str] = []
+    get = client.get
+
+    def counting_get(space: str, path: str, version: int | None = None) -> bytes:
+        fetched.append(path)
+        return get(space, path, version=version)
+
+    client.get = counting_get  # type: ignore[method-assign]
+    second = tmp_path / "second"
+    assert store_sync.pull(client, SPACE, second, reuse=first) == 3
+    # Only changed or new documents come from the store; a.md is copied (sha256 matched).
+    assert sorted(fetched) == ["b.md", "c.md"]
+    assert (second / "a.md").read_bytes() == b"same"
+    assert (second / "b.md").read_bytes() == b"new"
+    assert (second / "c.md").read_bytes() == b"added"
+
+
+def test_pull_reuse_never_trusts_a_tampered_earlier_file(
+    api: KnowledgeApi, tmp_path: Path
+) -> None:
+    client = client_for(api)
+    client.put(SPACE, "a.md", b"truth", if_version=0)
+    first = tmp_path / "first"
+    store_sync.pull(client, SPACE, first)
+    (first / "a.md").write_bytes(b"edited locally")
+    second = tmp_path / "second"
+    store_sync.pull(client, SPACE, second, reuse=first)
+    assert (second / "a.md").read_bytes() == b"truth"

@@ -332,9 +332,26 @@ def consistent_listing(
     raise SyncError("the store kept changing during listing; try again")
 
 
-def pull(client: StoreClient, space: str, out: Path) -> int:
+def _reusable(reuse: Path | None, path: str, sha256: str | None) -> bytes | None:
+    """The bytes of ``path`` in an earlier snapshot when their SHA-256 matches the listing."""
+    if reuse is None or not sha256:
+        return None
+    try:
+        earlier = safe_target(reuse, path)
+        if earlier.is_symlink() or not earlier.is_file():
+            return None
+        data = earlier.read_bytes()
+    except (OSError, SyncError):
+        return None
+    return data if hashlib.sha256(data).hexdigest() == sha256 else None
+
+
+def pull(
+    client: StoreClient, space: str, out: Path, *, reuse: Path | None = None
+) -> int:
     """Write a fresh snapshot. out must be new or empty, so no file deleted in the
-    store can linger from an earlier pull."""
+    store can linger from an earlier pull. With ``reuse`` (an earlier snapshot), a document
+    whose bytes there still match the listed SHA-256 is copied instead of fetched."""
     if out.exists() and (not out.is_dir() or any(out.iterdir())):
         raise SyncError("pull needs a new or empty --out directory")
     # The snapshot holds private documents: owner-only directories and files.
@@ -356,7 +373,10 @@ def pull(client: StoreClient, space: str, out: Path) -> int:
         with os.fdopen(fd, "wb") as handle:
             # The version from the listing: the snapshot is one consistent point in time
             # even if documents change while it is being pulled.
-            handle.write(client.get(space, path, version=int(remote[path]["version"])))
+            data = _reusable(reuse, path, remote[path].get("sha256"))
+            if data is None:
+                data = client.get(space, path, version=int(remote[path]["version"]))
+            handle.write(data)
     return len(remote)
 
 
@@ -389,6 +409,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--out", type=Path, help="snapshot directory (pull)")
     parser.add_argument(
+        "--reuse",
+        type=Path,
+        help="earlier snapshot: copy documents whose SHA-256 still matches (pull)",
+    )
+    parser.add_argument(
         "--prune",
         action="store_true",
         help="push: delete store documents that are not in the source (a mirror)",
@@ -399,7 +424,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "pull":
             if not args.out:
                 parser.error("pull needs --out")
-            print(f"pulled {pull(client, args.space, args.out)} documents")
+            print(
+                f"pulled {pull(client, args.space, args.out, reuse=args.reuse)} documents"
+            )
             return 0
         if not args.root:
             parser.error(f"{args.command} needs --root")
